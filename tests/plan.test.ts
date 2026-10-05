@@ -84,6 +84,19 @@ describe("tour order and chapters", () => {
     expect(coreTerms(collectDeps(ingest.files))).toEqual(["component", "props", "state", "hook", "store", "action", "reducer", "middleware"]);
   });
 
+  it("only defines hooks and server components when the code uses them", () => {
+    const classic = ingestOf({
+      "package.json": '{ "dependencies": { "react": "16", "next": "9" } }',
+      "pages/index.jsx": `export default class Home extends React.Component {}\n${lines(10)}`,
+    });
+    expect(coreTerms(collectDeps(classic.files), classic.files)).toEqual(["component", "props", "state", "route"]);
+    const modern = ingestOf({
+      "package.json": '{ "dependencies": { "react": "19", "next": "16" } }',
+      "app/page.tsx": `export default function Page() { const [a] = useState(0); return a }\n${lines(10)}`,
+    });
+    expect(coreTerms(collectDeps(modern.files), modern.files)).toEqual(["component", "props", "state", "hook", "route", "server component"]);
+  });
+
   it("puts over-capitalised titles into sentence case", () => {
     expect(sentenceCase("The Article Editor Form")).toBe("The article editor form");
     expect(sentenceCase("How the API route talks to OpenAI")).toBe("How the API route talks to OpenAI");

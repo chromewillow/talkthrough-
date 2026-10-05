@@ -138,7 +138,8 @@ export function parseSectionReply(raw: string): ParsedSection {
   const t = text.match(TITLE_RE);
   if (t && t.index !== undefined && t.index < 400) {
     title = cleanInline(t[1]).replace(/[.。]$/, "");
-    text = (text.slice(0, t.index) + text.slice(t.index + t[0].length)).trim();
+    // Anything before the TITLE line is chatter like "Sure, here's the narration".
+    text = text.slice(t.index + t[0].length).trim();
   }
   // Models that ignore the TITLE line often open with a markdown heading instead.
   if (!title) {

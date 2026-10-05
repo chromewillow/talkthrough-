@@ -42,7 +42,8 @@ Accuracy:
 - Trace a value from where it's set to where it's used before you say what it does. If it starts empty, is never used, or gets overridden, say that instead.
 - Describe things in the order they run, not the order they appear in the file. Say exactly how a check behaves: a hard stop or a skip, a real network call or a stand-in, and what the user sees when it triggers.
 - When an effect depends on framework or browser behaviour you can't confirm, say what the code is meant to do. A reason the code and its comments don't state, or a purpose guessed from a name, gets "probably".
-- Files that use this one, or that it uses, are not shown to you. Say what they do only as far as this file proves it; hedge the rest. Never assume a connection just because of the order of the tour.
+- Files that use this one, or that it uses, are not shown to you. Say what they do only as far as this file proves it. Never assume a connection just because of the order of the tour.
+- Hedge sparingly: "probably" or "likely" at most twice in a part, since a long listen full of them sounds unsure. If a guess about another file doesn't change the point, leave it out. If it does, give the listener something to do instead, like "check the pagination component too".
 - Don't list things that aren't there unless the listener would otherwise go looking for them.
 - Never read out secrets, keys, tokens, passwords or personal data, even if they appear in the code.`;
 
@@ -71,7 +72,7 @@ export function buildContext(ingest: IngestResult, plan: NarrationPlan, length: 
     plan,
     files,
     budget: BUDGETS[length],
-    terms: coreTerms(collectDeps(ingest.files)),
+    terms: coreTerms(collectDeps(ingest.files), ingest.files),
   };
 }
 
@@ -158,11 +159,27 @@ const TERM_SETS: { when: (deps: string[]) => boolean; terms: string[] }[] = [
   { when: (d) => d.some((x) => /^(ai|openai|@anthropic-ai\/sdk|langchain|@ai-sdk\/.+|llamaindex)$/.test(x)), terms: ["prompt", "model", "streaming"] },
 ];
 
+const SCRIPT_FILE = /\.(m?jsx?|tsx?|vue|svelte)$/;
+
+// Terms a dependency makes possible but only the code proves: an app on old
+// class components has React but no hooks, and not every Next app has an app folder.
+const TERM_EVIDENCE: Record<string, (files: RepoFile[]) => boolean> = {
+  hook: (files) => files.some((f) => SCRIPT_FILE.test(f.path) && /\buse[A-Z]\w*\s*\(/.test(f.content)),
+  "server component": (files) => files.some((f) => /(^|\/)app\/(.+\/)?(page|layout)\.(jsx?|tsx?)$/.test(f.path)),
+};
+
 /** Programming terms this stack leans on, defined once in the introduction. */
-export function coreTerms(deps: Set<string>): string[] {
+export function coreTerms(deps: Set<string>, files?: RepoFile[]): string[] {
   const list = [...deps];
   const terms: string[] = [];
-  for (const set of TERM_SETS) if (set.when(list)) for (const t of set.terms) if (!terms.includes(t)) terms.push(t);
+  for (const set of TERM_SETS) {
+    if (!set.when(list)) continue;
+    for (const t of set.terms) {
+      if (terms.includes(t)) continue;
+      if (files && TERM_EVIDENCE[t] && !TERM_EVIDENCE[t](files)) continue;
+      terms.push(t);
+    }
+  }
   return terms.slice(0, 10);
 }
 
@@ -227,8 +244,15 @@ const OPENING_ANGLES: Record<string, string[]> = {
   other: ["Open with what this file is for, in plain terms.", "Open with why the app needs it."],
 };
 
+/** Sentence shapes for the first line, rotated so neighbouring parts don't start alike. */
+const OPENING_SHAPES = [
+  "Make that idea your first sentence, and bring in the file's name and its folder in the second.",
+  "Start from a concrete moment when this code runs, such as a click, a page loading or a request arriving, and name the file and its folder by the second sentence.",
+  'You may lead with the file\'s name and folder, but don\'t use the shape "The X file, in the Y folder, is…", which many other parts use.',
+];
+
 const BANNED_OPENINGS =
-  'Name the file and its folder in the same sentence or the next. Don\'t open with "This file", "This is", "Here we have", "Next up", "Now let\'s", "Alright", "So", "Remember", "Imagine", "If this file disappeared", "Everything we\'ve covered so far", or a question followed by "That\'s the question this file answers".';
+  'Don\'t open with "This file", "This is", "Here we have", "Next up", "Now let\'s", "Alright", "So", "Remember", "Imagine", "If this file disappeared", "Everything we\'ve covered so far", or a question followed by "That\'s the question this file answers".';
 
 const FLOW_RULES = [
   "Tie this part back to at least one earlier part by name, with the concrete hand-off: what is passed, by whom, to whom. For example: \"the index file we heard about earlier hands this store to the whole app.\"",
@@ -339,11 +363,13 @@ export function fileMessages(
             : "Continue briefly from where the earlier part ended.",
         ]
       : [
-          isFirstChunk ? angles[index % angles.length] : "Continue the walkthrough of this file from where the earlier part ended.",
+          isFirstChunk
+            ? `${angles[index % angles.length]} ${OPENING_SHAPES[index % OPENING_SHAPES.length]}`
+            : "Continue the walkthrough of this file from where the earlier part ended.",
           "Explain what it does and why it's built this way. Take its most important pieces in a sensible order and explain each one properly, naming the functions, components, settings or data a builder would search for.",
           "Make its connections concrete: which parts of the app use it and for what, what it relies on, and what information flows in and out. Use the file relationships listed above, and only claim what the code shows.",
           isLastChunk
-            ? "Give one to three change pointers a builder could act on without guessing, depending on how much this file controls. Each names the change they'd want, the exact function, setting or value to search for, and every other place that has to change with it: a second copy of the same list, a matching ID in another file, a flag that controls whether it shows, a backend that must accept a new field, a step that registers the new thing. If one of those places is in another file, name it, hedged with \"probably\" if you can't see it. A partial recipe is worse than none. Consider removing a feature, not only adding one. Bring them in the way a friend would, such as \"Say you want to add a theme…\", never with a heading-like sentence."
+            ? "Give one to three change pointers a builder could act on without guessing, depending on how much this file controls. Each names the change they'd want, the exact function, setting or value to search for, and every other place that has to change with it: a second copy of the same list, a matching ID in another file, a flag that controls whether it shows, a backend that must accept a new field, a step that registers the new thing. If one of those places is in another file, name it and say what to check there. A partial recipe is worse than none. Consider removing a feature, not only adding one. Bring each one in the way a friend would, starting from the goal, like \"To show twenty articles a page…\" or \"If you'd rather sign people in with a magic link…\", never with a heading-like sentence. Stock lead-ins such as \"Say you want\" and \"The catch is\" wear thin over a long tour, so don't use them."
             : "If this part holds an obvious place to change something a builder would care about, point it out, including any trap.",
           "Only say \"this is where you change X\" if X is actually written in this file. If this file just uses something defined elsewhere, such as prompt text, a model list, theme colours or error wording, send them to that file instead. Name the hard-coded values a builder is likely to hit, such as timeouts, page sizes, ports and delays, with the value in words.",
           "Skip trivial details like import lists, boilerplate, type annotations and commented-out code.",

@@ -69,6 +69,12 @@ describe("parseSectionReply", () => {
     expect(swapped).toMatchObject({ body: "Body.", summary: "Does X.", changes: null });
   });
 
+  it("drops chatter before the TITLE line", () => {
+    const r = parseSectionReply("Sure, here's the narration you asked for.\n\nTITLE: The store\n\nThe store holds the data.\n\nSUMMARY: The store.");
+    expect(r.title).toBe("The store");
+    expect(r.body).toBe("The store holds the data.");
+  });
+
   it("unwraps a fenced reply", () => {
     const r = parseSectionReply("```\nTITLE: X\n\nBody.\n\nSUMMARY: S\n```");
     expect(r.title).toBe("X");

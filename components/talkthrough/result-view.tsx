@@ -118,6 +118,11 @@ export function ResultView({ walkthrough: w, onRetryMissing, className }: Props)
                     <span className="h-px flex-1 bg-gradient-to-l from-transparent to-border" />
                   </div>
                 )}
+                {chapter.title && chapter.bridge && (
+                  <p className="mx-auto mb-2 max-w-[32rem] text-center font-reading text-[0.9375rem] leading-relaxed text-muted-foreground italic">
+                    {chapter.bridge}
+                  </p>
+                )}
                 {chapter.sections.map(({ section: s, number }) => (
                   <Part key={s.id} id={`part-${number}`} eyebrow={`Part ${number}`} title={s.title} paths={s.paths} body={s.body} />
                 ))}

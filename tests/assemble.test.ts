@@ -30,19 +30,20 @@ describe("toListeningText", () => {
       ...w,
       sections: [
         { ...w.sections[0], chapter: "start" },
-        { ...w.sections[1], chapter: "setup" },
+        { id: "file:src/b.ts", title: "What it hands on", body: "Third.", summary: "", paths: ["src/b.ts"], chapter: "start" },
+        { ...w.sections[1], chapter: "setup", bridge: "With the code heard, here's how it runs." },
       ],
     };
     expect(toListeningText(chaptered)).toBe(
-      "A guided tour of my cool App.\n\nThis app does a thing.\n\nChapter one. Where it all starts.\n\nPart one. Where it starts.\n\nFirst.\n\nSecond.\n\nChapter two. Setup, tests and docs.\n\nPart two. How it's set up.\n\nConfig.\n\nLast stop. Where to go when you want to change something.\n\nGo explore.\n",
+      "A guided tour of my cool App.\n\nThis app does a thing.\n\nChapter one. Where it all starts.\n\nPart one. Where it starts.\n\nFirst.\n\nSecond.\n\nPart two. What it hands on.\n\nThird.\n\nChapter two. Setup, tests and docs.\n\nWith the code heard, here's how it runs.\n\nConfig.\n\nLast stop. Where to go when you want to change something.\n\nGo explore.\n",
     );
     expect(toMarkdown(chaptered)).toContain("## Chapter 2: Setup, tests and docs");
-    expect(toMarkdown(chaptered)).toContain("### 2. How it's set up.");
+    expect(toMarkdown(chaptered)).toContain("### 3. How it's set up.");
     // A plan's own chapter title and the app's spoken name win over the defaults.
     const named: Walkthrough = {
       ...chaptered,
       name: "Conduit",
-      sections: [chaptered.sections[0], { ...chaptered.sections[1], chapterTitle: "The project setup" }],
+      sections: [chaptered.sections[0], chaptered.sections[1], { ...chaptered.sections[2], chapterTitle: "The project setup" }],
     };
     expect(toListeningText(named)).toContain("A guided tour of Conduit.");
     expect(toListeningText(named)).toContain("Chapter two. The project setup.");

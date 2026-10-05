@@ -7,14 +7,26 @@
 import type { IngestResult } from "@/lib/ingest/types";
 import { chat, isFatal, LlmError, newSession, withRetries, type LlmErrorKind, type Session, type Transport } from "./llm";
 import { sectionLabel, sectionPaths } from "./plan";
-import { buildContext, closingMessages, fileMessages, groupMessages, overviewMessages, type ChatMessage, type PromptContext } from "./prompts";
-import { firstSentences, normaliseParagraphs, parseSectionReply, toSpeakable } from "./speakable";
+import { lintPart, type EarlierPart } from "./lint";
+import {
+  buildContext,
+  chapterRuns,
+  closingMessages,
+  fileMessages,
+  groupMessages,
+  overviewMessages,
+  revisionMessages,
+  type ChatMessage,
+  type PromptContext,
+} from "./prompts";
+import { firstSentences, normaliseParagraphs, parseSectionReply, toSpeakable, type ParsedSection } from "./speakable";
 import { chapterTitle, type Chunk, type FileSection, type GroupSection, type LlmSettings, type NarrationOptions, type NarrationPlan, type PlanSection, type SectionResult, type Walkthrough } from "./types";
 
 export type PipelineEvent =
   | { type: "phase"; phase: "explaining" | "overview" }
   | { type: "section-start"; id: string }
   | { type: "section-part"; id: string; part: number; total: number }
+  | { type: "section-revising"; id: string }
   | { type: "section-done"; result: SectionResult }
   | { type: "section-failed"; id: string; message: string }
   | { type: "retry"; label: string; waitMs: number; reason: LlmErrorKind }
@@ -70,49 +82,123 @@ export async function runWalkthrough(input: RunInput): Promise<RunOutcome> {
 
   try {
     onEvent({ type: "phase", phase: "explaining" });
-    const queue = plan.sections.filter((s) => !results[s.id]);
+    const order = new Map(plan.sections.map((sec, i) => [sec.id, i]));
+    const draftQueue = plan.sections.filter((sec) => !results[sec.id]);
+    // Drafted parts waiting for their second look, in tour order.
+    const reviseQueue: PlanSection[] = [];
+    const drafts = new Map<string, Draft>();
+    const failedIds = new Set<string>();
     const failed: string[] = [];
     let fatal: LlmError | null = null;
     let consecutiveFailures = 0;
     let lastTransientError: LlmError | null = null;
+    const revise = options.revise !== false;
 
-    const worker = async () => {
-      while (queue.length && !fatal && !signal.aborted) {
-        const section = queue.shift()!;
-        onEvent({ type: "section-start", id: section.id });
-        try {
-          // Parts are written a few at a time; each sees whatever finished before it starts.
-          const earlier = new Map(Object.entries(results));
-          const result =
-            section.kind === "file"
-              ? await explainFile(ctx, section, call, onEvent, earlier)
-              : await explainGroup(ctx, section, call, earlier);
-          results[section.id] = result;
-          consecutiveFailures = 0;
-          onEvent({ type: "section-done", result });
-        } catch (err) {
-          const e = err instanceof LlmError ? err : new LlmError("server", err instanceof Error ? err.message : String(err));
-          if (isFatal(e)) {
-            fatal ??= e;
-            controller.abort();
-            return;
-          }
-          // Cancelled because the run stopped: not this section's fault.
-          if (signal.aborted) return;
-          failed.push(section.id);
-          onEvent({ type: "section-failed", id: section.id, message: e.message });
-          lastTransientError = e;
-          if (++consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-            fatal ??= e;
-            controller.abort();
-            return;
-          }
-        }
+    // Workers that run out of ready work wait here until something finishes.
+    let waiters: (() => void)[] = [];
+    const notify = () => {
+      const w = waiters;
+      waiters = [];
+      w.forEach((resolve) => resolve());
+    };
+    const nextChange = () => new Promise<void>((resolve) => waiters.push(resolve));
+    signal.addEventListener("abort", notify, { once: true });
+
+    /** What the listener will have heard before a part: final parts where they exist, drafts otherwise. */
+    const earlierFor = (index: number) => {
+      const map = new Map<string, SectionResult>();
+      for (const sec of plan.sections.slice(0, index)) {
+        const r = results[sec.id] ?? drafts.get(sec.id)?.result;
+        if (r) map.set(sec.id, r);
+      }
+      return map;
+    };
+    // A part is revised once everything before it has at least a draft.
+    const reviseReady = (sec: PlanSection) =>
+      plan.sections.slice(0, order.get(sec.id)!).every((p) => results[p.id] || drafts.has(p.id) || failedIds.has(p.id));
+
+    const onError = (sec: PlanSection, err: unknown): boolean => {
+      const e = err instanceof LlmError ? err : new LlmError("server", err instanceof Error ? err.message : String(err));
+      if (isFatal(e)) {
+        fatal ??= e;
+        controller.abort();
+        return false;
+      }
+      // Cancelled because the run stopped: not this section's fault.
+      if (signal.aborted) return false;
+      failed.push(sec.id);
+      failedIds.add(sec.id);
+      onEvent({ type: "section-failed", id: sec.id, message: e.message });
+      lastTransientError = e;
+      if (++consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        fatal ??= e;
+        controller.abort();
+        return false;
+      }
+      return true;
+    };
+
+    const finish = (result: SectionResult) => {
+      results[result.id] = result;
+      consecutiveFailures = 0;
+      onEvent({ type: "section-done", result });
+    };
+
+    const draftOne = async (section: PlanSection) => {
+      onEvent({ type: "section-start", id: section.id });
+      try {
+        const earlier = earlierFor(order.get(section.id)!);
+        const draft =
+          section.kind === "file" ? await explainFile(ctx, section, call, onEvent, earlier) : await explainGroup(ctx, section, call, earlier);
+        if (!revise) return finish(draft.result);
+        drafts.set(section.id, draft);
+        reviseQueue.push(section);
+        reviseQueue.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
+        consecutiveFailures = 0;
+      } catch (err) {
+        return onError(section, err);
+      } finally {
+        notify();
       }
     };
 
-    const workers = Math.max(1, Math.min(options.concurrency, queue.length || 1));
+    const reviseOne = async (section: PlanSection) => {
+      const draft = drafts.get(section.id)!;
+      onEvent({ type: "section-revising", id: section.id });
+      try {
+        const result = await reviseDraft(ctx, section, draft, earlierFor(order.get(section.id)!), call);
+        finish(result);
+      } catch (err) {
+        const e = err instanceof LlmError ? err : null;
+        if (e && (isFatal(e) || e.kind === "aborted" || signal.aborted)) return onError(section, err);
+        // A second look that fails still leaves a good first draft.
+        finish(draft.result);
+      } finally {
+        drafts.delete(section.id);
+        notify();
+      }
+    };
+
+    const worker = async () => {
+      while (!fatal && !signal.aborted) {
+        const ready = reviseQueue.findIndex(reviseReady);
+        if (ready !== -1) {
+          const [section] = reviseQueue.splice(ready, 1);
+          if ((await reviseOne(section)) === false) return;
+          continue;
+        }
+        if (draftQueue.length) {
+          if ((await draftOne(draftQueue.shift()!)) === false) return;
+          continue;
+        }
+        if (!reviseQueue.length) return;
+        await nextChange();
+      }
+    };
+
+    const workers = Math.max(1, Math.min(options.concurrency, draftQueue.length || 1));
     await Promise.all(Array.from({ length: workers }, worker));
+    notify();
 
     if (input.signal.aborted) return { status: "failed", error: new LlmError("aborted", "Stopped."), failed };
     if (fatal) {
@@ -134,7 +220,9 @@ export async function runWalkthrough(input: RunInput): Promise<RunOutcome> {
     // The closing builds on the introduction, so it's written second.
     const overviewReply = await call(overviewMessages(ctx, ordered), "the overview", 0.5);
     const overview = prose(overviewReply);
-    const name = parseSectionReply(overviewReply.text).name;
+    const parsedOverview = parseSectionReply(overviewReply.text);
+    const name = parsedOverview.name;
+    applyChapterNames(ordered, parsedOverview.chapters, parsedOverview.bridges);
     const closingReply = await call(closingMessages(ctx, ordered, overview), "the closing guide", 0.5);
 
     const walkthrough: Walkthrough = {
@@ -159,6 +247,15 @@ export async function runWalkthrough(input: RunInput): Promise<RunOutcome> {
 }
 
 type Reply = { text: string; truncated: boolean };
+
+/** A part's first version, with what's needed to revise it. */
+export type Draft = {
+  result: SectionResult;
+  /** The model's reply, trailers included. */
+  reply: string;
+  /** The single request that produced it; absent for long files written in pieces. */
+  messages?: ChatMessage[];
+};
 type Call = (messages: ChatMessage[], label: string, temperature?: number) => Promise<Reply>;
 
 /** A reply cut off at the token limit ends mid-sentence; drop the unfinished tail. */
@@ -181,11 +278,14 @@ async function explainFile(
   call: Call,
   onEvent: (e: PipelineEvent) => void,
   earlierResults: Map<string, SectionResult> = new Map(),
-): Promise<SectionResult> {
+): Promise<Draft> {
   const bodies: string[] = [];
   const summaries: string[] = [];
   const changes: string[] = [];
   const terms = new Set<string>();
+  const notes = { recipes: [] as string[], bugs: [] as string[], explained: [] as string[], facts: [] as string[] };
+  let lastMessages: ChatMessage[] | undefined;
+  let lastReply = "";
   let title: string | null = null;
   let chunks = section.chunks;
 
@@ -195,8 +295,9 @@ async function explainFile(
     const earlier = summaries.map((s, n) => `Part ${n + 1}: ${s}`);
     if (bodies.length) earlier.push(`The previous part ended with: "${lastParagraph(bodies[bodies.length - 1])}"`);
     let reply: Reply;
+    const messages = fileMessages(ctx, section, chunk, earlier, earlierResults);
     try {
-      reply = await call(fileMessages(ctx, section, chunk, earlier, earlierResults), section.path);
+      reply = await call(messages, section.path);
     } catch (err) {
       // Too long for this model's context window: split this part in two and carry on.
       const halves = err instanceof LlmError && err.kind === "context" && chunk.text.length > 4000 && chunks.length < 24 ? halve(chunk) : null;
@@ -219,9 +320,15 @@ async function explainFile(
     summaries.push(parsed.summary ?? firstSentences(parsed.body));
     if (parsed.changes) changes.push(parsed.changes);
     parsed.terms.forEach((t) => terms.add(t));
+    notes.recipes.push(...parsed.recipes);
+    notes.bugs.push(...parsed.bugs);
+    notes.explained.push(...parsed.explained);
+    notes.facts.push(...parsed.facts);
+    lastMessages = messages;
+    lastReply = reply.text;
   }
 
-  return {
+  const result: SectionResult = {
     id: section.id,
     title: sentenceCase(title ?? fallbackTitle(section.path)),
     body: bodies.join("\n\n"),
@@ -231,7 +338,12 @@ async function explainFile(
     chapterTitle: chapterTitle(section.chapter, ctx.plan.chapterTitles),
     changes: changes.join(" ") || undefined,
     terms: [...terms],
+    ...notes,
   };
+  // One request: revise inside its own conversation. Several: revise the joined text.
+  return bodies.length === 1 && chunks.length === 1
+    ? { result, reply: lastReply, messages: lastMessages }
+    : { result, reply: formatReply(result) };
 }
 
 async function explainGroup(
@@ -239,22 +351,28 @@ async function explainGroup(
   section: GroupSection,
   call: Call,
   earlier: Map<string, SectionResult> = new Map(),
-): Promise<SectionResult> {
+): Promise<Draft> {
   let reply: Reply;
+  let messages = groupMessages(ctx, section, earlier);
   try {
-    reply = await call(groupMessages(ctx, section, earlier), section.title);
+    reply = await call(messages, section.title);
   } catch (err) {
     if (!(err instanceof LlmError && err.kind === "context")) throw err;
     // Show less of each file and try once more.
     const smaller = { ...ctx, budget: { ...ctx.budget, groupChars: Math.floor(ctx.budget.groupChars / 3) } };
-    reply = await call(groupMessages(smaller, section, earlier), section.title);
+    messages = groupMessages(smaller, section, earlier);
+    reply = await call(messages, section.title);
   }
   const parsed = parseSectionReply(reply.text);
   if (!parsed.body) throw new LlmError("empty", "The model's answer had no narration in it.");
   if (reply.truncated) parsed.body = endAtSentence(parsed.body);
+  return { result: toResult(ctx, section, parsed, section.title), reply: reply.text, messages };
+}
+
+function toResult(ctx: PromptContext, section: PlanSection, parsed: ParsedSection, fallback: string): SectionResult {
   return {
     id: section.id,
-    title: sentenceCase(parsed.title ?? section.title),
+    title: sentenceCase(parsed.title ?? fallback),
     body: parsed.body,
     summary: parsed.summary ?? firstSentences(parsed.body),
     paths: sectionPaths(section),
@@ -262,7 +380,95 @@ async function explainGroup(
     chapterTitle: chapterTitle(section.chapter, ctx.plan.chapterTitles),
     changes: parsed.changes ?? undefined,
     terms: parsed.terms,
+    recipes: parsed.recipes,
+    bugs: parsed.bugs,
+    explained: parsed.explained,
+    facts: parsed.facts,
   };
+}
+
+/** A result written back out in the reply format, for revising a long file's joined draft. */
+function formatReply(r: SectionResult): string {
+  const list = (xs?: string[]) => (xs?.length ? xs.join("\n") : "none");
+  return [
+    `TITLE: ${r.title}`,
+    r.body,
+    `RECIPE: ${list(r.recipes)}`,
+    `BUGS: ${list(r.bugs)}`,
+    `EXPLAINED: ${list(r.explained)}`,
+    `FACTS: ${list(r.facts)}`,
+    `TERMS: ${r.terms?.length ? r.terms.join(", ") : "none"}`,
+    `SUMMARY: ${r.summary}`,
+  ].join("\n\n");
+}
+
+/** The earlier part that shares the most rare names with this one, if it shares enough. */
+function siblingOf(ctx: PromptContext, section: PlanSection, earlier: Map<string, SectionResult>): SectionResult | undefined {
+  const mine = new Set(sectionPaths(section).flatMap((p) => [...(ctx.links.names.get(p) ?? [])]));
+  if (mine.size < 3) return undefined;
+  let best: SectionResult | undefined;
+  let bestShared = 2;
+  for (const r of earlier.values()) {
+    const theirs = new Set(r.paths.flatMap((p) => [...(ctx.links.names.get(p) ?? [])]));
+    const shared = [...mine].filter((n) => theirs.has(n)).length;
+    if (shared > bestShared && shared >= 0.4 * Math.min(mine.size, theirs.size)) {
+      best = r;
+      bestShared = shared;
+    }
+  }
+  return best;
+}
+
+/**
+ * The second look: with everything before it now written, cut repeats, settle
+ * hedges and check recipes. If the revision comes back empty, the draft stands.
+ */
+async function reviseDraft(
+  ctx: PromptContext,
+  section: PlanSection,
+  draft: Draft,
+  earlier: Map<string, SectionResult>,
+  call: Call,
+): Promise<SectionResult> {
+  const index = ctx.plan.sections.findIndex((s) => s.id === section.id);
+  const ordered = ctx.plan.sections.slice(0, index).map((s, n) => ({ n: n + 1, r: earlier.get(s.id) }));
+  const known: EarlierPart[] = ordered.filter((x) => x.r).map((x) => ({ number: x.n, title: x.r!.title, body: x.r!.body }));
+  const previous = earlier.get(ctx.plan.sections[index - 1]?.id ?? "");
+  const explainedTerms = [...new Set([...ctx.terms, ...[...earlier.values()].flatMap((r) => r.terms ?? [])])];
+  const flags = lintPart(draft.result.body, known, explainedTerms);
+  const messages = revisionMessages(ctx, section, {
+    draftMessages: draft.messages,
+    draftReply: draft.reply,
+    earlier,
+    previous,
+    sibling: siblingOf(ctx, section, earlier),
+    flags,
+  });
+  const reply = await call(messages, `${sectionLabel(section)} (second look)`, 0.4);
+  const parsed = parseSectionReply(reply.text);
+  // A revision that lost most of the part is worse than the draft.
+  if (!parsed.body || parsed.body.split(/\s+/).length < draft.result.body.split(/\s+/).length * 0.5) return draft.result;
+  if (reply.truncated) parsed.body = endAtSentence(parsed.body);
+  const revised = toResult(ctx, section, parsed, draft.result.title);
+  return {
+    ...revised,
+    title: parsed.title ? revised.title : draft.result.title,
+    summary: parsed.summary ?? draft.result.summary,
+    terms: parsed.terms.length ? parsed.terms : draft.result.terms,
+    recipes: parsed.recipes.length ? parsed.recipes : draft.result.recipes,
+    bugs: parsed.bugs.length ? parsed.bugs : draft.result.bugs,
+    explained: parsed.explained.length ? parsed.explained : draft.result.explained,
+    facts: parsed.facts.length ? parsed.facts : draft.result.facts,
+  };
+}
+
+/** Chapter titles and bridges from the introduction, onto the parts that open each chapter. */
+export function applyChapterNames(results: SectionResult[], titles: Record<number, string>, bridges: Record<number, string>) {
+  chapterRuns(results).forEach((run, i) => {
+    const title = titles[i + 1];
+    for (const r of run.parts) if (title) r.chapterTitle = title;
+    if (i > 0 && bridges[i + 1]) run.parts[0].bridge = bridges[i + 1];
+  });
 }
 
 /** Splits a part in two for a model with a small context window; null if it can't be split. */

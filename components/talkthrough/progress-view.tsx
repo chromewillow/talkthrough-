@@ -45,6 +45,7 @@ export function ProgressView({ run, className }: { run: RunState; className?: st
     if (!s) return id;
     const a = run.active[id];
     const base = s.kind === "file" ? s.path : s.title.toLowerCase();
+    if (a?.revising) return `${base} · second look`;
     return a?.total ? `${base} · part ${a.part} of ${a.total}` : base;
   };
 

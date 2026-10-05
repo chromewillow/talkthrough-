@@ -129,6 +129,43 @@ describe("tour order and chapters", () => {
     expect(plan.chapterTitles?.setup).toBe("Supporting pieces and setup");
   });
 
+  it("plays a screen's own state right after it, and sibling screens back to back", () => {
+    const screen = (name: string, extra = "") =>
+      `import { connect } from "react-redux";\nconst mapDispatchToProps = d => ({ a: () => d({ type: ${name.toUpperCase()}_LOADED }), b: () => d({ type: UPDATE_FIELD_AUTH }), onChangeEmail: 1, onChangePassword: 2, submitForm: 3 });\n${extra}\n${lines(60)}`;
+    const ingest = ingestOf({
+      "package.json": '{ "dependencies": { "react": "16", "redux": "4" } }',
+      "src/index.js": `import App from "./App";\n${lines(10)}`,
+      "src/App.js": `import Login from "./components/Login";\nimport Home from "./components/Home";\nimport Register from "./components/Register";\n${lines(60)}`,
+      "src/components/Login.js": screen("login"),
+      "src/components/Home.js": `const x = HOME_LOADED;\n${lines(70)}`,
+      "src/components/Register.js": screen("register"),
+      "src/reducers/auth.js": `export default (s, a) => a.type === UPDATE_FIELD_AUTH ? { ...s, onChangeEmail: 1 } : a.type === LOGIN_LOADED ? s : s;\n${Array.from({ length: 60 }, (_, i) => `run(${i});`).join("\n")}`,
+    });
+    const ids = buildPlan(ingest).sections.map((s) => s.id);
+    const at = (p: string) => ids.indexOf(`file:${p}`);
+    expect(at("src/components/Register.js")).toBe(at("src/components/Login.js") + 2);
+    expect(at("src/reducers/auth.js")).toBe(at("src/components/Login.js") + 1);
+    expect(at("src/components/Home.js")).toBeGreaterThan(at("src/components/Register.js"));
+  });
+
+  it("splits a long screens chapter where new screens begin", () => {
+    const pages = Array.from({ length: 6 }, (_, i) => `src/pages/P${i}.jsx`);
+    const files: Record<string, string> = {
+      "package.json": '{ "dependencies": { "react": "19" } }',
+      "src/main.jsx": `import App from "./App";\n${lines(10)}`,
+      "src/App.jsx": `${pages.map((p, i) => `import P${i} from "./${p.slice(4, -4)}";`).join("\n")}\n${lines(60)}`,
+    };
+    pages.forEach((p, i) => {
+      files[p] = `import A${i} from "../components/A${i}";\nimport B${i} from "../components/B${i}";\n${lines(60)}`;
+      files[`src/components/A${i}.jsx`] = lines(60);
+      files[`src/components/B${i}.jsx`] = lines(60);
+    });
+    const plan = buildPlan(ingestOf(files));
+    const chapters = [...new Set(plan.sections.map((s) => s.chapter))];
+    expect(chapters.filter((c) => c.startsWith("interface")).length).toBeGreaterThan(1);
+    expect(plan.chapterTitles?.["interface:2"]).toBe("More of what you see on screen");
+  });
+
   it("gives every file one spoken name, with the folder when the name alone is generic", () => {
     const names = spokenFileNames([
       "src/reducer.js",
@@ -144,7 +181,7 @@ describe("tour order and chapters", () => {
     expect(names.get("src/components/App.js")).toBe("the App component");
     expect(names.get("src/reducer.js")).toBe("the top-level reducer file");
     expect(names.get("src/reducers/articleList.js")).toBe("the article list reducer");
-    expect(names.get("src/components/Article/index.js")).toBe("the index file in the Article folder");
+    expect(names.get("src/components/Article/index.js")).toBe("the Article component");
     expect(names.get("src/components/Article/CommentInput.js")).toBe("the Comment Input component");
     expect(names.get("src/agent.js")).toBe("the agent file");
     expect(names.get("src/constants/actionTypes.js")).toBe("the action types file");

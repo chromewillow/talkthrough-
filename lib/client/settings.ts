@@ -8,6 +8,8 @@ import type { LlmSettings } from "@/lib/narrate/types";
 export type StoredSettings = LlmSettings & {
   remember: boolean;
   concurrency: number;
+  /** Give each part a second look: better narration, about twice the requests. */
+  revise: boolean;
 };
 
 export const DEFAULT_SETTINGS: StoredSettings = {
@@ -16,6 +18,7 @@ export const DEFAULT_SETTINGS: StoredSettings = {
   model: "anthropic/claude-sonnet-5.5",
   remember: true,
   concurrency: 4,
+  revise: true,
 };
 
 export type ProviderPreset = { name: string; baseUrl: string; model: string; keyHint: string; keyUrl: string };
@@ -48,6 +51,7 @@ export function loadSettings(): StoredSettings {
       ...DEFAULT_SETTINGS,
       ...parsed,
       concurrency: clampConcurrency(parsed.concurrency ?? DEFAULT_SETTINGS.concurrency),
+      revise: parsed.revise !== false,
     };
   } catch {
     return { ...DEFAULT_SETTINGS };

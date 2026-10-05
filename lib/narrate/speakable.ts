@@ -55,6 +55,8 @@ export function toSpeakable(input: string): string {
   // Code names a voice would spell out or mash together: SET_PAGE, mapDispatchToProps.
   t = t.replace(/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/g, screamingToWords);
   t = t.replace(/\b[a-z][a-z0-9]*(?:[A-Z]+[a-z0-9]*)+\b/g, camelToWords);
+  // Action names written without underscores: "APP LOAD", "LOGIN".
+  t = t.replace(/\b[A-Z][A-Z0-9]{2,}(?:[ \t]+[A-Z][A-Z0-9]{1,})*\b/g, shoutedToWords);
   // Trailing-off dots: "here... yet" → "here, yet".
   t = t.replace(/(\w)[ \t]*(?:\.{3}|…)[ \t]+(?=[a-z])/g, "$1, ");
   t = t.replace(/(\w)[ \t]*(?:\.{3}|…)(?=[ \t]*(?:[A-Z\n]|$))/g, "$1.");
@@ -81,6 +83,20 @@ export function toSpeakable(input: string): string {
 
 const ACRONYMS = new Set(["API", "URL", "ID", "IDS", "JWT", "HTTP", "HTTPS", "UI", "SQL", "CSS", "HTML", "JSON", "CLI", "SDK", "LLM", "AI", "DB", "AWS", "S3", "DOM", "XML", "PDF", "CSV", "SMS", "OTP", "TTL", "CORS", "CSRF", "OAUTH", "SSO", "MFA", "UUID"]);
 const CAMEL_KEEP = new Set(["iPhone", "iPad", "iOS", "iPadOS", "macOS", "watchOS", "tvOS", "visionOS", "eBay", "jQuery", "tRPC", "gRPC", "iCloud", "pH"]);
+
+const KEEP_CAPS = new Set([...ACRONYMS, "README", "TODO", "CRUD", "REST", "YAML", "TOML", "HTMX", "GRPC", "NASA", "UTF", "ASCII", "GPU", "CPU", "RAM", "SSD", "MVP", "SaaS", "FAQ", "GDPR", "ESM", "CJS", "NPM", "PNPM", "RSS", "SVG", "PNG", "JPEG", "GIF", "MP3", "MP4", "WASM", "SEO", "OK", "TV", "US", "UK", "EU", "AM", "PM", "USD", "GPT", "LLMS", "APIS", "URLS", "SDKS", "UIS", "PDFS", "CSVS"]);
+
+/**
+ * "APP LOAD" → "app load", "LOGIN" → "login": capitals read as shouting or
+ * get spelled out. Known acronyms keep their capitals, and a lone short word
+ * like "JWT" is left alone.
+ */
+export function shoutedToWords(run: string): string {
+  const words = run.split(/[ \t]+/);
+  if (words.length === 1 && (words[0].length <= 3 || KEEP_CAPS.has(words[0]))) return run;
+  if (words.every((w) => KEEP_CAPS.has(w))) return run;
+  return words.map((w) => (KEEP_CAPS.has(w) ? w : w.toLowerCase())).join(" ");
+}
 
 /** SET_PAGE → "set page"; NEXT_PUBLIC_API_URL → "next public API URL". */
 export function screamingToWords(name: string): string {
@@ -147,12 +163,30 @@ export type ParsedSection = {
   changes: string | null;
   terms: string[];
   name: string | null;
+  recipes: string[];
+  bugs: string[];
+  explained: string[];
+  facts: string[];
+  /** From the introduction: chapter titles and the bridges into each chapter, by chapter number. */
+  chapters: Record<number, string>;
+  bridges: Record<number, string>;
 };
 
 const TITLE_RE = /^[ \t>*_#]*TITLE[ \t*_]*[:：][ \t*_]*(.+)$/im;
 const NAME_RE = /^[ \t>*_#]*NAME[ \t*_]*[:：][ \t*_]*(.+)$/m;
-/** Lines after the narration, in any order: "CHANGES: …", "TERMS: …", "SUMMARY: …". */
-const TRAILER_RE = /^[ \t>*_#]*(CHANGES|TERMS|SUMMARY)[ \t*_]*[:：][ \t*_]*/gim;
+/** Lines after the narration, in any order: "RECIPE: …", "BUGS: …", "SUMMARY: …" and the rest. */
+const TRAILER_RE = /^[ \t>*_#]*(CHANGES|TERMS|SUMMARY|RECIPES?|BUGS|EXPLAINED|FACTS)[ \t*_]*[:：][ \t*_]*/gim;
+const CHAPTER_LINE_RE = /^[ \t>*_#]*(CHAPTER|BRIDGE)[ \t]+(\d{1,2})[ \t*_]*[:：][ \t*_]*(.+)$/gim;
+
+/** "- one\n- two" → ["one", "two"]; "none" → []. */
+function lines(value: string | undefined): string[] {
+  if (!value || /^none\.?$/i.test(value.trim())) return [];
+  return value
+    .split("\n")
+    .map((l) => cleanInline(l.replace(/^[\s*•-]*(\d{1,2}[.)]\s+)?/, "")))
+    .filter((l) => l && !/^none\.?$/i.test(l))
+    .slice(0, 12);
+}
 
 /** Splits a "TITLE: … / narration / CHANGES / TERMS / SUMMARY" reply into its parts. */
 export function parseSectionReply(raw: string): ParsedSection {
@@ -164,13 +198,22 @@ export function parseSectionReply(raw: string): ParsedSection {
   let title: string | null = null;
   let name: string | null = null;
   const trailers: Record<string, string> = {};
+  const chapters: Record<number, string> = {};
+  const bridges: Record<number, string> = {};
+
+  // The introduction names the chapters and writes the lines that lead into them.
+  text = text.replace(CHAPTER_LINE_RE, (_, kind: string, n: string, value: string) => {
+    if (kind.toUpperCase() === "CHAPTER") chapters[Number(n)] = cleanInline(value).replace(/[.。]$/, "");
+    else bridges[Number(n)] = cleanInline(value);
+    return "";
+  });
 
   // Everything from the first trailer label on is trailers; each runs to the next label.
   const labels = [...text.matchAll(TRAILER_RE)];
   if (labels.length) {
     labels.forEach((m, i) => {
       const end = i + 1 < labels.length ? labels[i + 1].index : text.length;
-      const key = m[1].toUpperCase();
+      const key = m[1].toUpperCase().replace(/^RECIPES$/, "RECIPE");
       trailers[key] ??= text.slice(m.index + m[0].length, end).trim();
     });
     text = text.slice(0, labels[0].index).trim();
@@ -221,6 +264,12 @@ export function parseSectionReply(raw: string): ParsedSection {
     changes: changes && !/^none\.?$/i.test(changes) ? changes : null,
     terms,
     name: name ? name.slice(0, 80) : null,
+    recipes: lines(trailers.RECIPE),
+    bugs: lines(trailers.BUGS),
+    explained: lines(trailers.EXPLAINED),
+    facts: lines(trailers.FACTS),
+    chapters,
+    bridges,
   };
 }
 

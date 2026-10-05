@@ -134,7 +134,7 @@ export function TalkthroughApp() {
         ingest: result,
         plan,
         settings: { baseUrl: settings.baseUrl, apiKey: settings.apiKey, model: settings.model },
-        options: { ...DEFAULT_OPTIONS, concurrency: settings.concurrency },
+        options: { ...DEFAULT_OPTIONS, concurrency: settings.concurrency, revise: settings.revise },
         done,
         signal: controller.signal,
         session: sessionRef.current.session,

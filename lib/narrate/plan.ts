@@ -5,7 +5,8 @@
  * and configuration last.
  */
 import type { FileCategory, IngestResult, RepoFile } from "@/lib/ingest/types";
-import { CHAPTER_TITLES, type ChapterKey, type Chunk, type Depth, type GroupKind, type GroupSection, type NarrationLength, type NarrationPlan, type PlanSection } from "./types";
+import { buildLinkIndex, isRegistry, type LinkIndex } from "./links";
+import { CHAPTER_TITLES, type ChapterId, type ChapterKey, type Chunk, type Depth, type FileSection, type GroupKind, type GroupSection, type NarrationLength, type NarrationPlan, type PlanSection } from "./types";
 
 export type Budget = {
   /** Most files that get a full-length section. */
@@ -381,8 +382,17 @@ export function buildPlan(ingest: IngestResult, length: NarrationLength = "mediu
   type Keyed = { section: PlanSection; tier: number; order: number };
   const keyed: Keyed[] = [];
 
+  // State that belongs to one or two screens (a page's reducer, a form's store)
+  // plays right after the first of them, while the listener has that screen in mind.
+  const links = buildLinkIndex(files);
+  const screens = new Set(individuals.filter((f) => tierOf(f) === "component").map((f) => f.path));
+  const pairedAfter = pairStateWithScreens(individuals, screens, links, reach, (f) => isFoundation(f) || f.isEntry);
+
   const byTier = new Map<FileCategory, RepoFile[]>();
-  for (const f of individuals) byTier.set(tierOf(f), [...(byTier.get(tierOf(f)) ?? []), f]);
+  for (const f of individuals) {
+    if (pairedAfter.has(f.path)) continue;
+    byTier.set(tierOf(f), [...(byTier.get(tierOf(f)) ?? []), f]);
+  }
   for (const [tier, list] of byTier) {
     const ordered = orderTier(list, tier, reach);
     // Several short files in one folder play better as one section than as a
@@ -495,6 +505,18 @@ export function buildPlan(ingest: IngestResult, length: NarrationLength = "mediu
     sections = sections.filter((sec) => !drop.has(sec.id));
   }
 
+  const shellImports = new Set(individuals.filter((f) => tierOf(f) === "route" || f.isEntry).flatMap((f) => f.imports));
+  sections = keepSiblingsTogether(sections, links, shellImports);
+  sections = placePaired(sections, individuals.filter((f) => pairedAfter.has(f.path)), pairedAfter, (f) => ({
+    id: `file:${f.path}`,
+    kind: "file",
+    chapter: "interface",
+    path: f.path,
+    depth: depthOf(f),
+    category: f.category,
+    chunks: depthOf(f) !== "brief" ? chunkContent(f.content, budget.chunkChars) : [{ ...chunkContent(f.content, budget.chunkChars)[0], total: 1 }],
+  }));
+
   // Section IDs key everything downstream; make sure they're unique.
   const seen = new Map<string, number>();
   for (const sec of sections) {
@@ -502,7 +524,146 @@ export function buildPlan(ingest: IngestResult, length: NarrationLength = "mediu
     seen.set(sec.id, n + 1);
     if (n > 0) sec.id = `${sec.id}#${n + 1}`;
   }
-  return { sections, omitted: [...omitted, ...trivialPaths], chapterTitles: shapeChapters(sections) };
+  const chapterTitles = shapeChapters(sections);
+  Object.assign(chapterTitles, splitLongChapters(sections, shellImports));
+  return { sections, omitted: [...omitted, ...trivialPaths], chapterTitles };
+}
+
+/** Which screen each piece of screen-specific state should follow. */
+function pairStateWithScreens(
+  individuals: RepoFile[],
+  screens: Set<string>,
+  links: LinkIndex,
+  reach: Map<string, number>,
+  excluded: (f: RepoFile) => boolean,
+): Map<string, string> {
+  const paired = new Map<string, string>();
+  for (const f of individuals) {
+    if ((f.category !== "core" && f.category !== "helper") || excluded(f) || isRegistry(f)) continue;
+    const weight = new Map<string, number>();
+    for (const p of f.importedBy) if (screens.has(p)) weight.set(p, (weight.get(p) ?? 0) + 2);
+    for (const name of links.names.get(f.path) ?? []) {
+      for (const holder of links.holders.get(name) ?? []) if (holder !== f.path && screens.has(holder)) weight.set(holder, (weight.get(holder) ?? 0) + 1);
+    }
+    const strong = [...weight].filter(([, w]) => w >= 2);
+    if (strong.length < 1 || strong.length > 2) continue;
+    // Strongest tie first; on a tie, the screen the listener meets first.
+    strong.sort((a, b) => b[1] - a[1] || (reach.get(a[0]) ?? 1e9) - (reach.get(b[0]) ?? 1e9));
+    paired.set(f.path, strong[0][0]);
+  }
+  return paired;
+}
+
+/** Puts each paired file right after the section that holds its screen, in that screen's chapter. */
+function placePaired(
+  sections: PlanSection[],
+  files: RepoFile[],
+  pairedAfter: Map<string, string>,
+  make: (f: RepoFile) => PlanSection,
+): PlanSection[] {
+  const out = [...sections];
+  for (const f of files) {
+    const screen = pairedAfter.get(f.path)!;
+    const at = out.findIndex((s) => sectionPaths(s).includes(screen));
+    const section = make(f);
+    if (at === -1) {
+      // Its screen didn't make the tour on its own; play it with the core logic instead.
+      section.chapter = "core";
+      const lastCore = out.map((s) => s.chapter).lastIndexOf("core");
+      out.splice(lastCore + 1, 0, section);
+      continue;
+    }
+    section.chapter = out[at].chapter;
+    // After the screen and anything already paired with it.
+    let end = at + 1;
+    while (end < out.length && out[end].kind === "file" && pairedAfter.get((out[end] as FileSection).path) === screen) end++;
+    out.splice(end, 0, section);
+  }
+  return out;
+}
+
+/**
+ * Screens that work alike, such as a sign-in and a sign-up page, play back to
+ * back so the second can say only what's different. Only whole screens move,
+ * each with the pieces that follow it, so no screen loses its parts.
+ */
+function keepSiblingsTogether(sections: PlanSection[], links: LinkIndex, screens: Set<string>): PlanSection[] {
+  const out = [...sections];
+  const isScreen = (s: PlanSection): s is FileSection => s.kind === "file" && screens.has(s.path);
+  const namesOf = (s: FileSection) => links.names.get(s.path) ?? new Set<string>();
+  // Where a screen's run ends: just before the next screen.
+  const runEnd = (from: number) => {
+    let i = from + 1;
+    while (i < out.length && !isScreen(out[i]) && out[i].chapter === out[from].chapter) i++;
+    return i;
+  };
+  for (let b = 1; b < out.length; b++) {
+    const B = out[b];
+    if (!isScreen(B) || namesOf(B).size < 3) continue;
+    let best = -1;
+    let bestShared = 0;
+    for (let a = 0; a < b; a++) {
+      const A = out[a];
+      if (!isScreen(A) || A.chapter !== B.chapter) continue;
+      const na = namesOf(A);
+      const shared = [...namesOf(B)].filter((n) => na.has(n)).length;
+      if (shared >= 3 && shared >= 0.5 * Math.min(na.size, namesOf(B).size) && shared > bestShared) {
+        best = a;
+        bestShared = shared;
+      }
+    }
+    if (best === -1) continue;
+    const to = runEnd(best);
+    if (to >= b) continue;
+    // B moves with its own run.
+    const end = runEnd(b);
+    const moved = out.splice(b, end - b);
+    out.splice(to, 0, ...moved);
+  }
+  return out;
+}
+
+/**
+ * A screens chapter that holds a big share of the tour is split where new
+ * screens begin, into runs of three to eight parts, so the listener gets a
+ * breather and a fresh heading. The introduction later names each one.
+ */
+function splitLongChapters(sections: PlanSection[], screenStarts: Set<string>): Partial<Record<string, string>> {
+  const titles: Partial<Record<string, string>> = {};
+  const keys: ChapterKey[] = ["interface", "core"];
+  for (const key of keys) {
+    const idx = sections.map((s, i) => (s.chapter === key ? i : -1)).filter((i) => i >= 0);
+    if (idx.length <= 10 || idx.length < sections.length * 0.35) continue;
+    // Runs that each begin with a screen.
+    const runs: number[][] = [];
+    for (const i of idx) {
+      const s = sections[i];
+      const startsScreen = s.kind === "file" && screenStarts.has(s.path);
+      if (!runs.length || startsScreen) runs.push([i]);
+      else runs[runs.length - 1].push(i);
+    }
+    const groups: number[][] = [];
+    let current: number[] = [];
+    for (const run of runs) {
+      if (current.length >= 3 && current.length + run.length > 8) {
+        groups.push(current);
+        current = [];
+      }
+      current.push(...run);
+    }
+    if (current.length) {
+      if (current.length < 3 && groups.length) groups[groups.length - 1].push(...current);
+      else groups.push(current);
+    }
+    if (groups.length < 2) continue;
+    groups.forEach((g, n) => {
+      if (n === 0) return;
+      const id = `${key}:${n + 1}` as ChapterId;
+      for (const i of g) sections[i].chapter = id;
+      titles[id] = `More of ${CHAPTER_TITLES[key].charAt(0).toLowerCase()}${CHAPTER_TITLES[key].slice(1)}`;
+    });
+  }
+  return titles;
 }
 
 function joinAnd(items: string[]) {

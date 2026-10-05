@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { camelToWords, firstSentences, parseSectionReply, polishPhrasing, screamingToWords, toSpeakable } from "@/lib/narrate/speakable";
+import { camelToWords, firstSentences, parseSectionReply, polishPhrasing, screamingToWords, shoutedToWords, toSpeakable } from "@/lib/narrate/speakable";
 
 describe("toSpeakable", () => {
   it("strips markdown a voice would read out", () => {
@@ -50,6 +50,14 @@ describe("code names", () => {
     expect(toSpeakable("It dispatches SET_PAGE from mapDispatchToProps.")).toBe("It dispatches set page from map dispatch to props.");
   });
 
+  it("lowers shouted action names but keeps acronyms", () => {
+    expect(shoutedToWords("APP LOAD")).toBe("app load");
+    expect(shoutedToWords("LOGIN")).toBe("login");
+    expect(shoutedToWords("JWT")).toBe("JWT");
+    expect(shoutedToWords("README")).toBe("README");
+    expect(toSpeakable("It sends APP LOAD, then LOGIN, with the JWT and the API URL.")).toBe("It sends app load, then login, with the JWT and the API URL.");
+  });
+
   it("smooths trailing-off dots and folder shorthand", () => {
     expect(toSpeakable("A line that reads No articles are here... yet.")).toBe("A line that reads No articles are here, yet.");
     expect(toSpeakable("It lives in the src folder.")).toBe("It lives in the source folder.");
@@ -65,6 +73,24 @@ describe("code names", () => {
 });
 
 describe("parseSectionReply", () => {
+  it("reads the notes for later parts, one per line", () => {
+    const r = parseSectionReply(
+      "TITLE: The editor\n\nThe editor saves articles.\n\nRECIPE: Add a cover image: add an input in the Editor component, then send it in submit form.\nBUGS:\n- submit form: errors never show\n- none\nEXPLAINED: pages empty their shared data when you leave\nFACTS: none\nTERMS: slug\nSUMMARY: The editor.",
+    );
+    expect(r.body).toBe("The editor saves articles.");
+    expect(r.recipes).toEqual(["Add a cover image: add an input in the Editor component, then send it in submit form."]);
+    expect(r.bugs).toEqual(["submit form: errors never show"]);
+    expect(r.explained).toEqual(["pages empty their shared data when you leave"]);
+    expect(r.facts).toEqual([]);
+  });
+
+  it("reads chapter names and bridges from the introduction", () => {
+    const o = parseSectionReply("NAME: Conduit\n\nConduit is a blogging site.\n\nCHAPTER 1: Where it all starts\nCHAPTER 2: Reading articles.\nBRIDGE 2: Now that the app is running, let's read something.");
+    expect(o.body).toBe("Conduit is a blogging site.");
+    expect(o.chapters).toEqual({ 1: "Where it all starts", 2: "Reading articles" });
+    expect(o.bridges).toEqual({ 2: "Now that the app is running, let's read something." });
+  });
+
   it("reads the terms a part explained and an app name", () => {
     const r = parseSectionReply("TITLE: The store\n\nThe store holds it.\n\nCHANGES: none\n\nTERMS: reducer, Slug.\n\nSUMMARY: The store.");
     expect(r.terms).toEqual(["reducer", "slug"]);

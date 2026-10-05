@@ -13,7 +13,7 @@ export type RunState = {
   ingest?: IngestResult;
   plan?: NarrationPlan;
   results: Record<string, SectionResult>;
-  active: Record<string, { part?: number; total?: number }>;
+  active: Record<string, { part?: number; total?: number; revising?: boolean }>;
   failed: Record<string, string>;
   notice?: string;
   relay: boolean;
@@ -81,6 +81,8 @@ export function runReducer(state: RunState | null, action: RunAction): RunState 
         }
         case "section-part":
           return { ...state, active: { ...state.active, [e.id]: { part: e.part, total: e.total } } };
+        case "section-revising":
+          return { ...state, active: { ...state.active, [e.id]: { revising: true } } };
         case "section-done": {
           const active = { ...state.active };
           delete active[e.result.id];

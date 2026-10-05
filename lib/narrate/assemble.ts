@@ -34,21 +34,22 @@ export function spokenName(name: string) {
     .trim();
 }
 
-export type Chapter = { title: string; sections: { section: SectionResult; number: number }[] };
+export type Chapter = { title: string; bridge?: string; sections: { section: SectionResult; number: number }[] };
 
 /**
  * Groups parts into the tour's chapters. Walkthroughs saved before chapters
  * existed come back as a single untitled chapter.
  */
 export function chaptersOf(w: Walkthrough): Chapter[] {
-  const chapters: Chapter[] = [];
+  const chapters: (Chapter & { id: string })[] = [];
   w.sections.forEach((section, i) => {
+    const id = section.chapter ?? "";
     const title = section.chapter ? (section.chapterTitle ?? chapterTitle(section.chapter)) : "";
     const last = chapters[chapters.length - 1];
-    if (last && last.title === title) last.sections.push({ section, number: i + 1 });
-    else chapters.push({ title, sections: [{ section, number: i + 1 }] });
+    if (last && last.id === id) last.sections.push({ section, number: i + 1 });
+    else chapters.push({ id, title, bridge: section.bridge, sections: [{ section, number: i + 1 }] });
   });
-  return chapters;
+  return chapters.map(({ title, bridge, sections }) => ({ title, bridge, sections }));
 }
 
 const CLOSING_LINE = "Last stop. Where to go when you want to change something.";
@@ -60,9 +61,12 @@ export function toListeningText(w: Walkthrough): string {
   const titled = chapters.some((c) => c.title);
   chapters.forEach((chapter, c) => {
     if (titled && chapter.title) parts.push(`Chapter ${numberWords(c + 1)}. ${sentence(chapter.title)}`);
+    if (titled && chapter.bridge) parts.push(chapter.bridge.trim());
+    // A chapter of one part needs no second heading.
+    const lone = titled && chapter.sections.length === 1;
     for (const { section, number } of chapter.sections) {
       // A spoken number marks the boundary; a bare title can sound like a stray sentence.
-      parts.push(`Part ${numberWords(number)}. ${sentence(section.title)}`);
+      if (!lone) parts.push(`Part ${numberWords(number)}. ${sentence(section.title)}`);
       parts.push(section.body.trim());
     }
   });
@@ -89,6 +93,7 @@ export function toMarkdown(w: Walkthrough): string {
   const titled = chapters.some((c) => c.title);
   chapters.forEach((chapter, c) => {
     if (titled && chapter.title) lines.push("", `## Chapter ${c + 1}: ${chapter.title}`);
+    if (titled && chapter.bridge) lines.push("", `*${chapter.bridge.trim()}*`);
     for (const { section: s, number } of chapter.sections) {
       lines.push("", `${titled ? "###" : "##"} ${number}. ${s.title}`, "");
       const paths = s.paths.length > 8 ? [...s.paths.slice(0, 8), `and ${s.paths.length - 8} more`] : s.paths;

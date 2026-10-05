@@ -95,6 +95,6 @@ test("stops a run and resumes without redoing finished parts", async ({ page }) 
   const before = chats;
   await page.getByRole("button", { name: "Resume" }).click();
   await expect(page.getByRole("heading", { name: "A guided tour of notes-app" })).toBeVisible({ timeout: 90_000 });
-  // Only the unfinished parts, the introduction and the closing are written again.
-  expect(chats - before).toBeLessThanOrEqual(total - finished + 2);
+  // Only the unfinished parts (a draft and a second look each), the introduction and the closing.
+  expect(chats - before).toBeLessThanOrEqual(2 * (total - finished) + 2);
 });

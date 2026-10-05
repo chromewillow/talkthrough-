@@ -71,7 +71,7 @@ describe("runWalkthrough", () => {
         prompts.push(user);
         const file = user.match(/<file path="([^"]+)">/)?.[1];
         if (user.includes("closing part")) return ok("Closing words.");
-        if (!user.includes("TITLE:")) return ok("NAME: Demo\n\nOverview words.");
+        if (!user.includes("TITLE:")) return ok("NAME: Demo\n\nOverview words.\n\nCHAPTER 1: Getting going\nBRIDGE 2: Next, the rest.");
         return ok(`TITLE: About ${file ?? "group"}\n\nNarration.\n\nTERMS: widget\n\nSUMMARY: Facts from ${file ?? "group"}.`);
       }),
     );
@@ -96,6 +96,11 @@ describe("runWalkthrough", () => {
     expect(outcome.walkthrough.title).toBe("A guided tour of Demo");
     expect(outcome.walkthrough.overview).toBe("Overview words.");
     expect(prompts[prompts.length - 1]).toContain("<introduction>\nOverview words.\n</introduction>");
+    // The introduction names the chapters and leads into each one after the first.
+    const sections = outcome.walkthrough.sections;
+    expect(sections[0].chapterTitle).toBe("Getting going");
+    const secondChapter = sections.find((s) => s.chapter !== sections[0].chapter);
+    if (secondChapter) expect(secondChapter.bridge).toBe("Next, the rest.");
   });
 
   it("skips sections finished by an earlier attempt", async () => {
@@ -118,8 +123,67 @@ describe("runWalkthrough", () => {
       includeOverview: false,
     });
     expect(outcome.status).toBe("sections");
-    expect(fetchMock).toHaveBeenCalledTimes(plan.sections.length - 1);
+    // A draft and a second look for each part that wasn't finished.
+    expect(fetchMock).toHaveBeenCalledTimes(2 * (plan.sections.length - 1));
     if (outcome.status === "sections") expect(outcome.sections[0].title).toBe("Cached");
+  });
+
+  it("revises each draft in its own conversation, with what came before it", async () => {
+    const calls: { role: string; content: string }[][] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_u: string, init: RequestInit) => {
+        const messages = JSON.parse(init.body as string).messages as { role: string; content: string }[];
+        calls.push(messages);
+        const file = messages[1].content.match(/<file path="([^"]+)">/)?.[1] ?? "group";
+        if (messages.length > 2) {
+          // The second look: an empty answer for one file shows the draft standing.
+          if (file === "src/b.ts") return ok("TITLE: Nothing\n\n");
+          return ok(`TITLE: Revised ${file}\n\nRevised narration for ${file}.\n\nBUGS: none\n\nSUMMARY: Revised summary of ${file}.`);
+        }
+        return ok(`TITLE: About ${file}\n\nDraft narration for ${file}.\n\nEXPLAINED: how ${file} works\n\nSUMMARY: Summary of ${file}.`);
+      }),
+    );
+    const ingest = demo();
+    const plan = buildPlan(ingest);
+    const outcome = await runWalkthrough({
+      ingest,
+      plan,
+      settings,
+      options: { length: "medium", concurrency: 2 },
+      signal: new AbortController().signal,
+      onEvent: () => {},
+      includeOverview: false,
+    });
+    expect(outcome.status).toBe("sections");
+    if (outcome.status !== "sections") return;
+    const byId = Object.fromEntries(outcome.sections.map((r) => [r.id, r]));
+    expect(byId["file:src/index.ts"].body).toBe("Revised narration for src/index.ts.");
+    expect(byId["file:src/b.ts"].body).toBe("Draft narration for src/b.ts.");
+    const revisions = calls.filter((m) => m.length === 4);
+    expect(revisions).toHaveLength(plan.sections.length);
+    // The draft is the assistant's own turn, and later parts hear about earlier ones.
+    const second = revisions.find((m) => m[1].content.includes(`<file path="${(plan.sections[1] as { path: string }).path}">`))!;
+    expect(second[2]).toMatchObject({ role: "assistant" });
+    expect(second[3].content).toContain("<previous");
+    expect(second[3].content).toMatch(/Already explained[\s\S]*how src\/index\.ts works/);
+  });
+
+  it("can skip the second look", async () => {
+    const fetchMock = vi.fn(async (_u: string, init: RequestInit) => reply(init));
+    vi.stubGlobal("fetch", fetchMock);
+    const ingest = demo();
+    const plan = buildPlan(ingest);
+    await runWalkthrough({
+      ingest,
+      plan,
+      settings,
+      options: { length: "medium", concurrency: 2, revise: false },
+      signal: new AbortController().signal,
+      onEvent: () => {},
+      includeOverview: false,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(plan.sections.length);
   });
 
   it("stops everything on a bad key without blaming individual sections", async () => {

@@ -27,7 +27,7 @@ type Props = {
 const SPEEDS = [1, 2, 4, 6];
 
 export function SettingsPanel({ value, onChange, open, onOpenChange, needsKey, ready = true, animate = true }: Props) {
-  const ids = { base: useId(), key: useId(), model: useId(), models: useId(), remember: useId(), provider: useId() };
+  const ids = { base: useId(), key: useId(), model: useId(), models: useId(), remember: useId(), provider: useId(), revise: useId() };
   const [showKey, setShowKey] = useState(false);
   const models = useModelList(open ? value.baseUrl : "");
   const host = safeHost(normaliseBaseUrl(value.baseUrl) || "—");
@@ -193,6 +193,18 @@ export function SettingsPanel({ value, onChange, open, onOpenChange, needsKey, r
                 ))}
               </div>
             </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-4 rounded-2xl border border-border px-4 py-3">
+            <div className="min-w-0">
+              <Label htmlFor={ids.revise} className="cursor-pointer tracking-[0.18em]">
+                Second look
+              </Label>
+              <p className="mt-1.5 text-[0.75rem] leading-relaxed text-faint">
+                Each part is reread against the ones before it to cut repeats and check facts. Better narration, about twice the requests.
+              </p>
+            </div>
+            <Switch id={ids.revise} checked={value.revise} onCheckedChange={(revise) => set({ revise })} />
           </div>
 
           <p className="text-[0.8125rem] leading-relaxed text-faint">

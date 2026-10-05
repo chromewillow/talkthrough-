@@ -33,7 +33,7 @@ export function ResultView({ walkthrough: w, onRetryMissing, className }: Props)
     <section aria-labelledby="result-title" className={cn("panel overflow-clip", className)}>
       <header className="px-5 pt-6 sm:px-8 sm:pt-8">
         <p className="label-caps text-gold/80">Your walkthrough</p>
-        <h2 id="result-title" className="mt-3 text-balance font-serif text-[2rem] leading-[1.08] text-soft-white sm:text-[2.5rem]">
+        <h2 id="result-title" className="mt-3 text-balance font-display text-[1.875rem] leading-[1.12] font-medium tracking-[-0.02em] text-soft-white sm:text-[2.25rem]">
           {w.title}
         </h2>
         <p className="mt-3 font-mono text-[0.6875rem] leading-relaxed text-faint">
@@ -44,15 +44,15 @@ export function ResultView({ walkthrough: w, onRetryMissing, className }: Props)
 
       <div className="sticky top-0 z-10 mt-5 border-y border-border bg-[rgb(9_11_20/0.82)] px-5 py-3 backdrop-blur-xl sm:px-8">
         <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={copy} className="basis-full min-[380px]:flex-1 min-[380px]:basis-auto sm:flex-none sm:px-7" aria-live="polite">
+          <Button onClick={copy} className="basis-full min-[440px]:flex-1 min-[440px]:basis-auto sm:flex-none sm:px-7" aria-live="polite">
             {copied ? <Check /> : <Copy />}
             {copied ? "Copied" : "Copy script"}
           </Button>
-          <Button variant="outline" className="flex-1 px-4 min-[380px]:flex-none" onClick={() => download(`${fileSlug(w)}.txt`, script, "text/plain")} aria-label="Download as a text file">
+          <Button variant="outline" className="flex-1 px-4 min-[440px]:flex-none" onClick={() => download(`${fileSlug(w)}.txt`, script, "text/plain")} aria-label="Download as a text file">
             <Download />
             .txt
           </Button>
-          <Button variant="outline" className="flex-1 px-4 min-[380px]:flex-none" onClick={() => download(`${fileSlug(w)}.md`, markdown, "text/markdown")} aria-label="Download as Markdown">
+          <Button variant="outline" className="flex-1 px-4 min-[440px]:flex-none" onClick={() => download(`${fileSlug(w)}.md`, markdown, "text/markdown")} aria-label="Download as Markdown">
             <Download />
             .md
           </Button>
@@ -100,7 +100,7 @@ export function ResultView({ walkthrough: w, onRetryMissing, className }: Props)
         <Contents w={w} />
 
         {view === "script" ? (
-          <pre className="mt-8 font-reading text-[1.0625rem] leading-[1.75] whitespace-pre-wrap text-soft-white/85">{script}</pre>
+          <pre className="mt-8 font-reading text-[1.0625rem] leading-[1.75] font-[450] whitespace-pre-wrap text-soft-white/88">{script}</pre>
         ) : (
           <article className="mx-auto mt-8 max-w-[38rem]">
             <Part id="part-overview" eyebrow="Introduction" title="The big picture" body={w.overview} />
@@ -111,7 +111,7 @@ export function ResultView({ walkthrough: w, onRetryMissing, className }: Props)
                     <span className="h-px flex-1 bg-gradient-to-r from-transparent to-border" />
                     <p className="text-center">
                       <span className="label-caps block text-gold/75">Chapter {numberWords(c + 1)}</span>
-                      <span className="mt-1 block font-serif text-[1.375rem] text-soft-white/90 italic">{chapter.title}</span>
+                      <span className="mt-1 block font-display text-[1.25rem] text-soft-white/90 italic">{chapter.title}</span>
                     </p>
                     <span className="h-px flex-1 bg-gradient-to-l from-transparent to-border" />
                   </div>
@@ -165,7 +165,7 @@ function Part({ id, eyebrow, title, paths, body }: { id: string; eyebrow: string
   return (
     <section id={id} className="scroll-mt-24 border-t border-border pt-8 pb-4 first:border-t-0 first:pt-0">
       <p className="label-caps">{eyebrow}</p>
-      <h3 className="mt-2 text-balance font-serif text-[1.75rem] leading-tight text-soft-white">{title}</h3>
+      <h3 className="mt-2 text-balance font-display text-[1.5rem] leading-[1.2] font-medium tracking-[-0.015em] text-soft-white">{title}</h3>
       {paths && paths.length > 0 && (
         <p className="mt-2 font-mono text-[0.6875rem] leading-relaxed break-words text-periwinkle/70">
           {paths.length > 6 ? `${paths.slice(0, 6).join(" · ")} · +${paths.length - 6} more` : paths.join(" · ")}
@@ -173,7 +173,7 @@ function Part({ id, eyebrow, title, paths, body }: { id: string; eyebrow: string
       )}
       <div className="mt-4 space-y-4">
         {body.split(/\n{2,}/).map((p, i) => (
-          <p key={i} className="font-reading text-[1.0625rem] leading-[1.75] text-pretty text-soft-white/85">
+          <p key={i} className="font-reading text-[1.0625rem] leading-[1.75] font-[450] text-pretty text-soft-white/88">
             {p}
           </p>
         ))}

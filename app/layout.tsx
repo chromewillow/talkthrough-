@@ -1,19 +1,14 @@
 import type { Metadata, Viewport } from "next";
-import { Instrument_Sans, Instrument_Serif, JetBrains_Mono, Newsreader } from "next/font/google";
+import { Google_Sans, JetBrains_Mono, Newsreader } from "next/font/google";
 
 import { Backdrop } from "@/components/talkthrough/backdrop";
 import "./globals.css";
 
-const serif = Instrument_Serif({
-  variable: "--font-instrument-serif",
+// Google's own typeface: open proportions and steady strokes that hold up on a dark background.
+const sans = Google_Sans({
+  variable: "--font-google-sans",
   subsets: ["latin"],
-  weight: "400",
   style: ["normal", "italic"],
-});
-
-const sans = Instrument_Sans({
-  variable: "--font-instrument-sans",
-  subsets: ["latin"],
 });
 
 const reading = Newsreader({
@@ -51,7 +46,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${serif.variable} ${sans.variable} ${reading.variable} ${mono.variable}`}>
+    <html lang="en" className={`${sans.variable} ${reading.variable} ${mono.variable}`}>
       <body>
         <Backdrop />
         {children}

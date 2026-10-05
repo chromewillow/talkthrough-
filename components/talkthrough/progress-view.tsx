@@ -110,7 +110,7 @@ export function ProgressView({ run, className }: { run: RunState; className?: st
       {latest && run.phase === "explaining" && (
         <figure className="mt-6 border-l border-periwinkle/25 pl-4">
           <figcaption className="label-caps">Just written · {latest.title}</figcaption>
-          <blockquote className="mt-2 line-clamp-3 font-reading text-[0.9375rem] leading-relaxed text-soft-white/75 italic">
+          <blockquote className="mt-2 line-clamp-3 font-reading text-[0.9375rem] leading-relaxed font-[450] text-soft-white/80 italic">
             {latest.body}
           </blockquote>
         </figure>

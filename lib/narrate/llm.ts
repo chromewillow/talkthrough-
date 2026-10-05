@@ -22,6 +22,9 @@ export type LlmErrorKind =
   | "aborted";
 
 export class LlmError extends Error {
+  /** Set when the model hit its token limit before producing any text. */
+  outOfRoom = false;
+
   constructor(
     public kind: LlmErrorKind,
     message: string,
@@ -50,11 +53,15 @@ export type Session = {
   /** Some models want max_completion_tokens; some reject temperature. */
   tokenParam: "max_tokens" | "max_completion_tokens" | "none";
   sendTemperature: boolean;
+  /** Reasoning models spend tokens thinking; this grows when one runs out of room. */
+  tokenBoost: number;
 };
 
 export function newSession(): Session {
-  return { transport: "direct", tokenParam: "max_tokens", sendTemperature: true };
+  return { transport: "direct", tokenParam: "max_tokens", sendTemperature: true, tokenBoost: 1 };
 }
+
+const MAX_TOKEN_BOOST = 4;
 
 export function normaliseBaseUrl(raw: string): string {
   let url = raw.trim().replace(/\/+$/, "");
@@ -86,11 +93,16 @@ export type ChatResult = { text: string; finishReason: string | null };
 
 export async function chat(settings: LlmSettings, session: Session, messages: ChatMessage[], opts: CallOptions): Promise<ChatResult> {
   // Up to two quiet retries to adapt request parameters to what the model accepts.
-  for (let adapt = 0; adapt < 3; adapt++) {
+  for (let adapt = 0; adapt < 4; adapt++) {
     try {
       return await chatOnce(settings, session, messages, opts);
     } catch (err) {
       if (err instanceof LlmError && err.kind === "bad_request" && adaptParams(session, err.message)) continue;
+      // Ran out of room before writing anything: give later requests more.
+      if (err instanceof LlmError && err.outOfRoom && session.tokenParam !== "none" && session.tokenBoost < MAX_TOKEN_BOOST) {
+        session.tokenBoost *= 2;
+        continue;
+      }
       throw err;
     }
   }
@@ -118,7 +130,7 @@ function adaptParams(session: Session, message: string): boolean {
 async function chatOnce(settings: LlmSettings, session: Session, messages: ChatMessage[], opts: CallOptions): Promise<ChatResult> {
   const baseUrl = normaliseBaseUrl(settings.baseUrl);
   const payload: Record<string, unknown> = { model: settings.model.trim(), messages };
-  if (session.tokenParam !== "none") payload[session.tokenParam] = opts.maxTokens;
+  if (session.tokenParam !== "none") payload[session.tokenParam] = opts.maxTokens * session.tokenBoost;
   if (session.sendTemperature) payload.temperature = opts.temperature;
 
   let res: Response;
@@ -175,15 +187,22 @@ async function chatOnce(settings: LlmSettings, session: Session, messages: ChatM
   const embedded = (data as { error?: { message?: string; code?: number | string } }).error;
   if (embedded) throw classify(Number(embedded.code) || 500, embedded.message ?? "Unknown error", settings, baseUrl, null);
 
-  const choice = (data as { choices?: { message?: { content?: unknown }; finish_reason?: string }[] }).choices?.[0];
+  const choice = (
+    data as { choices?: { message?: { content?: unknown }; finish_reason?: string; error?: { message?: string; code?: number } }[] }
+  ).choices?.[0];
+  // OpenRouter can report an upstream provider failure inside the choice.
+  if (choice?.error) throw classify(Number(choice.error.code) || 502, choice.error.message ?? "Provider error", settings, baseUrl, null);
   const text = extractText(choice?.message?.content);
   if (!text.trim()) {
-    throw new LlmError(
+    const outOfRoom = choice?.finish_reason === "length";
+    const err = new LlmError(
       "empty",
-      choice?.finish_reason === "length"
+      outOfRoom
         ? "The model ran out of room before writing anything. Reasoning-heavy models sometimes do this; try a different model."
         : "The model sent back an empty answer.",
     );
+    err.outOfRoom = outOfRoom;
+    throw err;
   }
   return { text, finishReason: choice?.finish_reason ?? null };
 }

@@ -73,7 +73,7 @@ export function ProgressView({ run, className }: { run: RunState; className?: st
                   />
                 </div>
                 <Meta className="mt-0 shrink-0 tabular-nums">
-                  {done} of {total}
+                  {done} of {total} parts
                 </Meta>
               </div>
               {activeIds.length > 0 && (

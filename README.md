@@ -55,12 +55,19 @@ Optional environment variables:
 
 ### Testing without real services
 
-`e2e/mocks/codeload.mjs` serves `git archive` tarballs of local clones as if it were GitHub, and `e2e/mocks/llm.mjs` is a fake OpenAI-compatible provider (key `good-key`; models `missing`, `broke`, `slow` and `flaky` exercise the error paths; `CORS=0` makes it refuse browser requests so the relay kicks in).
+```bash
+npm run test:e2e   # builds the app and runs the browser tests
+```
+
+The end-to-end tests run a production build against two stand-ins: `e2e/mocks/codeload.mjs` serves the sample app in `e2e/fixtures/` as if it were a GitHub tarball, and `e2e/mocks/llm.mjs` is a fake OpenAI-compatible provider (key `good-key`; models `missing`, `broke`, `slow` and `flaky` exercise the error paths; `CORS=0` makes it refuse browser requests so the relay kicks in). If Playwright can't find a browser, point `PLAYWRIGHT_CHROMIUM_EXECUTABLE` at a Chromium binary.
+
+To click around by hand against the same stand-ins:
 
 ```bash
-PORT=4010 FIXTURES_DIR=~/fixtures node e2e/mocks/codeload.mjs
+PORT=4010 node e2e/mocks/codeload.mjs
 PORT=4011 node e2e/mocks/llm.mjs
 TALKTHROUGH_CODELOAD_BASE=http://localhost:4010 npm run dev
+# then use github.com/demo/notes-app, base URL http://localhost:4011/v1, key good-key
 ```
 
 ## Deploy

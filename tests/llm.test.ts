@@ -64,6 +64,29 @@ describe("chat", () => {
     expect(fetchMock.mock.calls[1][0]).toBe("/api/llm");
   });
 
+  it("gives reasoning models more room when they run out before answering", async () => {
+    const seen: number[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(init.body as string);
+        seen.push(body.max_tokens);
+        return body.max_tokens < 40
+          ? json(200, { choices: [{ message: { content: "" }, finish_reason: "length" }] })
+          : json(200, { choices: [{ message: { content: "thought it through" } }] });
+      }),
+    );
+    const session = newSession();
+    await expect(chat(settings, session, msgs, { maxTokens: 10, temperature: 0.5 })).resolves.toMatchObject({ text: "thought it through" });
+    expect(seen).toEqual([10, 20, 40]);
+    expect(session.tokenBoost).toBe(4);
+  });
+
+  it("treats a provider error reported inside a choice as a server problem", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => json(200, { choices: [{ error: { message: "upstream timeout", code: 502 } }] })));
+    await expect(chat(settings, newSession(), msgs, { maxTokens: 10, temperature: 0.5 })).rejects.toMatchObject({ kind: "server" });
+  });
+
   it("treats an empty answer as retryable", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => json(200, { choices: [{ message: { content: "" }, finish_reason: "length" }] })));
     await expect(chat(settings, newSession(), msgs, { maxTokens: 10, temperature: 0.5 })).rejects.toMatchObject({ kind: "empty" });

@@ -102,6 +102,14 @@ export function parseSectionReply(raw: string): ParsedSection {
     title = cleanInline(t[1]).replace(/[.。]$/, "");
     text = (text.slice(0, t.index) + text.slice(t.index + t[0].length)).trim();
   }
+  // Models that ignore the TITLE line often open with a markdown heading instead.
+  if (!title) {
+    const heading = text.match(/^[ \t]*#{1,6}[ \t]+(.+?)[ \t#]*$/m);
+    if (heading && heading.index !== undefined && heading.index < 5) {
+      title = cleanInline(heading[1]).replace(/[.。]$/, "");
+      text = text.slice(heading.index + heading[0].length).trim();
+    }
+  }
   text = text.replace(/^[ \t*_]*(NARRATION|BODY|SCRIPT)[ \t*_]*[:：][ \t]*/im, "");
 
   const body = normaliseParagraphs(toSpeakable(text));

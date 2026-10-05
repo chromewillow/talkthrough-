@@ -45,6 +45,12 @@ describe("parseSectionReply", () => {
     expect(parseSectionReply("Just prose, no labels.").title).toBeNull();
   });
 
+  it("uses a leading markdown heading as the title when there's no TITLE line", () => {
+    const r = parseSectionReply("## The chat route\n\nIt handles messages.\n\nSUMMARY: Chat.");
+    expect(r.title).toBe("The chat route");
+    expect(r.body).toBe("It handles messages.");
+  });
+
   it("unwraps a fenced reply", () => {
     const r = parseSectionReply("```\nTITLE: X\n\nBody.\n\nSUMMARY: S\n```");
     expect(r.title).toBe("X");

@@ -24,6 +24,7 @@ Writing for the ear. This matters more than anything else:
 - Never read code aloud. No symbols, brackets, operators, slashes, dots or snippets. Describe what the code does in words.
 - Say names the way a person says them, split into words: handleSubmit becomes "handle submit", useAuthStore becomes "use auth store", MAX_RETRIES becomes "max retries". When a name could be mistaken for ordinary words, introduce it as a name: "the function called on load", "a setting named max retries", "the component called Editor". That way the listener can search for it later.
 - Refer to files by name and folder, in words: "the page file in the dashboard folder", never "app/dashboard/page.tsx". Mention a file type only when it helps, said naturally: "the Python file", "the stylesheet".
+- Say library and package names in words too: react-router-dom becomes "React Router DOM", next-auth becomes "Next Auth", @tanstack/react-query becomes "TanStack Query".
 - Write acronyms in capitals so the voice spells them out: ID, URL, API, JSON, HTML, CSS, SQL, UI. Write "for example", not "e.g."; "and", not an ampersand; "versus", not "vs".
 - The listener can't see the screen, so never use visual cues like "notice", "as you can see", "at the top", "below" or "near the bottom". Point to things by what they do instead: "where the routes are listed", "the last thing the file does".
 - The first time a part uses a programming or framework term, add a short plain-English gloss. For example: "props, the values a parent component hands down to its children", or "middleware, code that sits in the middle of every request". Skip the gloss if the parts just before clearly covered it.
@@ -183,15 +184,13 @@ function tourPosition(ctx: PromptContext, id: string): string {
   const i = ctx.plan.sections.findIndex((s) => s.id === id);
   if (i === -1) return "";
   const total = ctx.plan.sections.length;
-  const before = ctx.plan.sections.slice(Math.max(0, i - 6), i).map(sectionLabel);
-  const after = ctx.plan.sections.slice(i + 1, i + 3).map(sectionLabel);
-  const lines = [
-    `This is part ${i + 1} of ${total} in the tour. The listener has already heard an introduction to the whole app, so don't re-explain what the app is. If an idea was introduced in the parts just before, refer back to it briefly instead of defining it again.`,
-  ];
-  if (before.length) lines.push(`Just before this, the tour covered: ${before.join("; ")}.`);
-  else lines.push("This is the first part after the introduction.");
-  if (after.length) lines.push(`Coming up next: ${after.join("; ")}.`);
-  return lines.join("\n");
+  const outline = ctx.plan.sections
+    .map((s, n) => `${n + 1}. ${sectionLabel(s)}${n === i ? "   <- this part" : ""}`)
+    .join("\n");
+  return [
+    `This is part ${i + 1} of ${total}. The listener has already heard an introduction to the whole app, so don't re-explain what the app is. If an idea was introduced in the parts just before, refer back to it briefly instead of defining it again. You may mention that something comes up later only if it's in the outline below.`,
+    `The whole tour, in listening order:\n<tour>\n${outline}\n</tour>`,
+  ].join("\n\n");
 }
 
 function relations(ctx: PromptContext, file: RepoFile): string {
@@ -224,8 +223,10 @@ export function fileMessages(
   const index = ctx.plan.sections.findIndex((s) => s.id === section.id);
   const isFirstChunk = chunk.index === 0;
   const isLastChunk = chunk.index === chunk.total - 1;
-  const range =
-    section.depth === "major" ? ctx.budget.majorWords : section.depth === "full" ? ctx.budget.fullWords : ctx.budget.briefWords;
+  const range = scaleToSize(
+    section.depth === "major" ? ctx.budget.majorWords : section.depth === "full" ? ctx.budget.fullWords : ctx.budget.briefWords,
+    file.lines,
+  );
   // Long files share the word budget across parts, with a floor so each part says something real.
   const perChunk: [number, number] =
     chunk.total > 1
@@ -260,12 +261,12 @@ export function fileMessages(
           "Explain what it does and why it's built this way. Take its most important pieces in a sensible order and explain each one properly, naming the functions, components, settings or data a builder would search for.",
           "Make its connections concrete: which parts of the app use it and for what, what it relies on, and what information flows in and out. Use the file relationships listed above, and only claim what the code shows.",
           isLastChunk
-            ? "Give two or three specific, practical pointers for changing it: what to edit for the changes a builder is most likely to want, including removing a feature, and any trap to watch for, like something that has to change in two places, an order that matters, or a matching change needed in another file. Make each pointer complete enough to act on."
+            ? "Give two or three specific, practical pointers for changing it: what to edit for the changes a builder is most likely to want, including removing a feature, and any trap to watch for, like something that has to change in two places, an order that matters, or a matching change needed in another file. Make each pointer complete enough to act on. Bring them in the way a friend would, such as \"Say you want to add a theme…\", never with a heading-like sentence such as \"For changes, here are a few pointers\", and vary how each one starts."
             : "If this part holds an obvious place to change something a builder would care about, point it out, including any trap.",
           "Skip trivial details like import lists, boilerplate, type annotations and commented-out code.",
         ];
   instructions.push(
-    "Stay inside the word range. Going over is worse than coming in a little under.",
+    `Stay inside the word range: ${perChunk[1]} words is a hard ceiling, and coming in a little under is fine.`,
     'Don\'t start with "Next up", "Now let\'s look at", "Alright" or "So".',
   );
 
@@ -282,6 +283,13 @@ export function fileMessages(
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: user },
   ];
+}
+
+/** A short file can't fill a long budget without padding, so small files get less. */
+export function scaleToSize([lo, hi]: [number, number], lines: number): [number, number] {
+  const factor = lines < 40 ? 0.6 : lines < 100 ? 0.8 : 1;
+  const round = (n: number) => Math.round((n * factor) / 10) * 10;
+  return [Math.max(50, round(lo)), Math.max(90, round(hi))];
 }
 
 function roughSize(lines: number) {

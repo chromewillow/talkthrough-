@@ -72,7 +72,9 @@ TALKTHROUGH_CODELOAD_BASE=http://localhost:4010 npm run dev
 
 ## Deploy
 
-Talkthrough is a standard Next.js app and deploys to Vercel with no configuration: import the repository at [vercel.com/new](https://vercel.com/new) and deploy. The ingest route runs for up to 60 seconds and the relay for up to 300.
+Talkthrough is a standard Next.js app and deploys to Vercel with no configuration and no environment variables. Import this repository at [vercel.com/new](https://vercel.com/new/import?s=https%3A%2F%2Fgithub.com%2Fchromewillow%2Ftalkthrough-) and press Deploy; after that, every push to `main` deploys automatically. The ingest route runs for up to 60 seconds and the relay for up to 300.
+
+To make your own copy instead:
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fchromewillow%2Ftalkthrough-)
 
@@ -92,7 +94,8 @@ lib/
   narrate/                 plan, prompts, model client, pipeline, assembly
   client/                  browser-side state, settings and history
 tests/                     vitest suites
-e2e/mocks/                 stand-ins for GitHub and a model provider
+e2e/                       browser tests, a sample app to narrate, and
+                           stand-ins for GitHub and a model provider
 ```
 
 ## Built to grow

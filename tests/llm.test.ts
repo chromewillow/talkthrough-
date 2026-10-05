@@ -87,6 +87,20 @@ describe("chat", () => {
     await expect(chat(settings, newSession(), msgs, { maxTokens: 10, temperature: 0.5 })).rejects.toMatchObject({ kind: "server" });
   });
 
+  it("gives up on a stuck provider without switching to the relay", async () => {
+    const fetchMock = vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const session = newSession();
+    await expect(chat(settings, session, msgs, { maxTokens: 10, temperature: 0.5, timeoutMs: 20 })).rejects.toMatchObject({ kind: "server" });
+    expect(session.transport).toBe("direct");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("treats an empty answer as retryable", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => json(200, { choices: [{ message: { content: "" }, finish_reason: "length" }] })));
     await expect(chat(settings, newSession(), msgs, { maxTokens: 10, temperature: 0.5 })).rejects.toMatchObject({ kind: "empty" });

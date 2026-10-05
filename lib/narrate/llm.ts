@@ -87,6 +87,7 @@ type CallOptions = {
   maxTokens: number;
   temperature: number;
   signal?: AbortSignal;
+  timeoutMs?: number;
 };
 
 export type ChatResult = { text: string; finishReason: string | null };
@@ -127,8 +128,53 @@ function adaptParams(session: Session, message: string): boolean {
   return false;
 }
 
+/** Longest we'll wait for one answer before treating the provider as stuck. */
+export const REQUEST_TIMEOUT_MS = 180_000;
+
+/** The caller's signal plus a timeout we can tell apart from a deliberate stop. */
+function deadline(outer: AbortSignal | undefined, ms: number) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, ms);
+  const onAbort = () => controller.abort();
+  if (outer?.aborted) controller.abort();
+  else outer?.addEventListener("abort", onAbort, { once: true });
+  return {
+    signal: controller.signal,
+    timedOut: () => timedOut && !outer?.aborted,
+    done: () => {
+      clearTimeout(timer);
+      outer?.removeEventListener("abort", onAbort);
+    },
+  };
+}
+
 async function chatOnce(settings: LlmSettings, session: Session, messages: ChatMessage[], opts: CallOptions): Promise<ChatResult> {
+  const d = deadline(opts.signal, opts.timeoutMs ?? REQUEST_TIMEOUT_MS);
+  try {
+    return await chatAttempt(settings, session, messages, opts, d);
+  } catch (err) {
+    if (d.timedOut()) {
+      throw new LlmError("server", `${safeHost(normaliseBaseUrl(settings.baseUrl))} took too long to answer.`);
+    }
+    throw err;
+  } finally {
+    d.done();
+  }
+}
+
+async function chatAttempt(
+  settings: LlmSettings,
+  session: Session,
+  messages: ChatMessage[],
+  opts: CallOptions,
+  d: ReturnType<typeof deadline>,
+): Promise<ChatResult> {
   const baseUrl = normaliseBaseUrl(settings.baseUrl);
+  const signal = d.signal;
   const payload: Record<string, unknown> = { model: settings.model.trim(), messages };
   if (session.tokenParam !== "none") payload[session.tokenParam] = opts.maxTokens * session.tokenBoost;
   if (session.sendTemperature) payload.temperature = opts.temperature;
@@ -140,15 +186,16 @@ async function chatOnce(settings: LlmSettings, session: Session, messages: ChatM
         method: "POST",
         headers: providerHeaders(settings, baseUrl),
         body: JSON.stringify(payload),
-        signal: opts.signal,
+        signal,
       });
     } catch {
+      if (d.timedOut()) throw new LlmError("server", `${safeHost(baseUrl)} took too long to answer.`);
       if (opts.signal?.aborted) throw new LlmError("aborted", "Stopped.");
       // A TypeError here is usually CORS: the provider won't talk to browsers.
       // Try once through the relay; if that works, stick with it.
       session.transport = "relay";
       try {
-        return await chatOnce(settings, session, messages, opts);
+        return await chatAttempt(settings, session, messages, opts, d);
       } catch (relayErr) {
         if (relayErr instanceof LlmError && relayErr.kind === "network") {
           session.transport = "direct";
@@ -166,9 +213,10 @@ async function chatOnce(settings: LlmSettings, session: Session, messages: ChatM
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${settings.apiKey.trim()}` },
         body: JSON.stringify({ baseUrl, payload }),
-        signal: opts.signal,
+        signal,
       });
     } catch {
+      if (d.timedOut()) throw new LlmError("server", `${safeHost(baseUrl)} took too long to answer.`);
       if (opts.signal?.aborted) throw new LlmError("aborted", "Stopped.");
       throw new LlmError("network", "We couldn't reach the Talkthrough relay. Check your internet connection.");
     }

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { analyzeFiles } from "@/lib/ingest/analyze";
 import type { IngestResult } from "@/lib/ingest/types";
 import { newSession } from "@/lib/narrate/llm";
-import { runWalkthrough, type PipelineEvent } from "@/lib/narrate/pipeline";
+import { endAtSentence, halve, runWalkthrough, type PipelineEvent } from "@/lib/narrate/pipeline";
 import { buildPlan } from "@/lib/narrate/plan";
 import type { SectionResult } from "@/lib/narrate/types";
 
@@ -134,5 +134,21 @@ describe("runWalkthrough", () => {
     });
     expect(outcome.status).toBe("sections");
     expect(calls).toBeGreaterThan(4);
+  });
+});
+
+describe("helpers", () => {
+  it("trims a cut-off reply back to its last full sentence", () => {
+    expect(endAtSentence("One whole sentence. Another full one. And then the")).toBe("One whole sentence. Another full one.");
+    expect(endAtSentence("Complete.")).toBe("Complete.");
+  });
+
+  it("can't loop forever on a single enormous line", () => {
+    const line = { index: 0, total: 1, startLine: 1, endLine: 1, text: "x".repeat(20000) };
+    const once = halve(line)!;
+    expect(once).toHaveLength(1);
+    expect(once[0].text.length).toBeLessThan(5000);
+    const again = halve(once[0])!;
+    expect(halve(again[0])).toBeNull();
   });
 });

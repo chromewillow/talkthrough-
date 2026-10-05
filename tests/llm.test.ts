@@ -51,6 +51,44 @@ describe("chat", () => {
     expect(bodies[bodies.length - 1]).toMatchObject({ max_completion_tokens: 10 });
   });
 
+  it("doesn't over-correct when several requests fail on the same unsupported parameter", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(init.body as string);
+        await new Promise((r) => setTimeout(r, 5));
+        if ("max_tokens" in body) return json(400, { error: { message: "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead." } });
+        return json(200, { choices: [{ message: { content: "ok" } }] });
+      }),
+    );
+    const session = newSession();
+    const results = await Promise.all([1, 2, 3, 4].map(() => chat(settings, session, msgs, { maxTokens: 10, temperature: 0.5 })));
+    expect(results.every((r) => r.text === "ok")).toBe(true);
+    expect(session.tokenParam).toBe("max_completion_tokens");
+  });
+
+  it("gives a cut-off answer more room, then marks it truncated", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => json(200, { choices: [{ message: { content: "Half a sent" }, finish_reason: "length" }] })));
+    const r = await chat(settings, newSession(), msgs, { maxTokens: 10, temperature: 0.5 });
+    expect(r).toMatchObject({ text: "Half a sent", truncated: true });
+  });
+
+  it("treats a relay that can't reach the provider as a network problem and stays direct", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.startsWith("https://")) throw new TypeError("Failed to fetch");
+        return new Response(JSON.stringify({ error: { message: "Couldn't connect" } }), {
+          status: 502,
+          headers: { "x-talkthrough-relay": "refused" },
+        });
+      }),
+    );
+    const session = newSession();
+    await expect(chat(settings, session, msgs, { maxTokens: 10, temperature: 0.5 })).rejects.toMatchObject({ kind: "network" });
+    expect(session.transport).toBe("direct");
+  });
+
   it("falls back to the relay when the browser request is blocked", async () => {
     const fetchMock = vi.fn(async (url: string) => {
       if (url.startsWith("https://")) throw new TypeError("Failed to fetch");

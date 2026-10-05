@@ -108,7 +108,11 @@ export function parseRepoUrl(raw: string): RepoTarget {
   let treeSegments: string[] = [];
   let pointsAtFile = false;
   if ((rest[0] === "tree" || rest[0] === "blob") && rest.length > 1) {
-    treeSegments = rest.slice(1).filter((s) => s !== "." && s !== "..");
+    treeSegments = rest.slice(1);
+    // Encoded slashes or dot segments could walk the download URL somewhere else.
+    if (treeSegments.some((s) => s === "." || s === ".." || /[/\\]/.test(s) || s.includes(".."))) {
+      throw new RepoUrlError("That link has a branch or folder name we can't use. Try the plain repository link.");
+    }
     pointsAtFile = rest[0] === "blob";
   }
 

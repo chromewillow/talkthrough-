@@ -37,6 +37,7 @@ export default defineConfig({
         TALKTHROUGH_CODELOAD_BASE: `http://localhost:${CODELOAD}`,
         // The mock providers are plain http on localhost.
         TALKTHROUGH_RELAY_ALLOW_HTTP: "1",
+        TALKTHROUGH_RELAY_ALLOW_PRIVATE: "1",
       },
     },
   ],

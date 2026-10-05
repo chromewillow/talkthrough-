@@ -17,13 +17,14 @@ function relativeTo(dir: string, path: string): string | null {
 }
 
 export class GitignoreSet {
-  private scopes: Scoped[] = [];
+  private scopes: (Scoped & { depth: number })[] = [];
+  private sorted = true;
 
   add(gitignorePath: string, contents: string) {
     const matcher = ignore({ allowRelativePaths: true }).add(contents);
-    this.scopes.push({ dir: dirOf(gitignorePath), matcher });
-    // Shallow rules first so deeper files can override them, like git.
-    this.scopes.sort((a, b) => depth(a.dir) - depth(b.dir));
+    const dir = dirOf(gitignorePath);
+    this.scopes.push({ dir, matcher, depth: depth(dir) });
+    this.sorted = false;
   }
 
   get size() {
@@ -31,6 +32,11 @@ export class GitignoreSet {
   }
 
   ignores(path: string): boolean {
+    if (!this.sorted) {
+      // Shallow rules first so deeper files can override them, like git.
+      this.scopes.sort((a, b) => a.depth - b.depth);
+      this.sorted = true;
+    }
     let ignored = false;
     for (const { dir, matcher } of this.scopes) {
       const rel = relativeTo(dir, path);

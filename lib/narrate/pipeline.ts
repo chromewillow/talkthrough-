@@ -65,7 +65,7 @@ export async function runWalkthrough(input: RunInput): Promise<RunOutcome> {
       lastTransport = session.transport;
       onEvent({ type: "transport", transport: session.transport });
     }
-    return result.text;
+    return { text: result.text, truncated: result.truncated };
   };
 
   try {
@@ -126,18 +126,19 @@ export async function runWalkthrough(input: RunInput): Promise<RunOutcome> {
     if (input.includeOverview === false) return { status: "sections", sections: ordered };
 
     onEvent({ type: "phase", phase: "overview" });
-    const [overviewRaw, closingRaw] = await Promise.all([
+    const [overviewReply, closingReply] = await Promise.all([
       call(overviewMessages(ctx, ordered), "the overview", 0.5),
       call(closingMessages(ctx, ordered), "the closing guide", 0.5),
     ]);
+    const prose = (r: Reply) => (r.truncated ? endAtSentence(cleanProse(r.text)) : cleanProse(r.text));
 
     const walkthrough: Walkthrough = {
       repo: ingest.repo,
       model: settings.model,
       createdAt: new Date().toISOString(),
       title: `A guided tour of ${ingest.repo.repo}`,
-      overview: cleanProse(overviewRaw),
-      closing: cleanProse(closingRaw),
+      overview: prose(overviewReply),
+      closing: prose(closingReply),
       sections: ordered,
       missing: plan.sections.filter((s) => !results[s.id]).map((s) => ({ id: s.id, label: sectionLabel(s) })),
     };
@@ -151,7 +152,16 @@ export async function runWalkthrough(input: RunInput): Promise<RunOutcome> {
   }
 }
 
-type Call = (messages: ChatMessage[], label: string, temperature?: number) => Promise<string>;
+type Reply = { text: string; truncated: boolean };
+type Call = (messages: ChatMessage[], label: string, temperature?: number) => Promise<Reply>;
+
+/** A reply cut off at the token limit ends mid-sentence; drop the unfinished tail. */
+export function endAtSentence(text: string): string {
+  const trimmed = text.trim();
+  if (/[.!?…]["”')]?$/.test(trimmed)) return trimmed;
+  const cut = Math.max(trimmed.lastIndexOf(". "), trimmed.lastIndexOf("! "), trimmed.lastIndexOf("? "), trimmed.lastIndexOf(".\n"));
+  return cut > trimmed.length * 0.5 ? trimmed.slice(0, cut + 1) : trimmed;
+}
 
 /** Strips any title/summary lines a model adds to free-form prose. */
 function cleanProse(raw: string): string {
@@ -176,20 +186,24 @@ async function explainFile(
     if (chunks.length > 1) onEvent({ type: "section-part", id: section.id, part: i + 1, total: chunks.length });
     const earlier = summaries.map((s, n) => `Part ${n + 1}: ${s}`);
     if (bodies.length) earlier.push(`The previous part ended with: "${lastParagraph(bodies[bodies.length - 1])}"`);
-    let reply: string;
+    let reply: Reply;
     try {
       reply = await call(fileMessages(ctx, section, chunk, earlier), section.path);
     } catch (err) {
       // Too long for this model's context window: split this part in two and carry on.
-      if (err instanceof LlmError && err.kind === "context" && chunk.text.length > 4000 && chunks.length < 24) {
-        chunks = [...chunks.slice(0, i), ...halve(chunk), ...chunks.slice(i + 1)].map((c, index, all) => ({ ...c, index, total: all.length }));
+      const halves = err instanceof LlmError && err.kind === "context" && chunk.text.length > 4000 && chunks.length < 24 ? halve(chunk) : null;
+      if (halves) {
+        chunks = [...chunks.slice(0, i), ...halves, ...chunks.slice(i + 1)].map((c, index, all) => ({ ...c, index, total: all.length }));
         i--;
         continue;
       }
+      // Keep what earlier parts of this file already said rather than losing it all.
+      if (bodies.length) break;
       throw err;
     }
-    const parsed = parseSectionReply(reply);
+    const parsed = parseSectionReply(reply.text);
     if (!parsed.body) throw new LlmError("empty", "The model's answer had no narration in it.");
+    if (reply.truncated) parsed.body = endAtSentence(parsed.body);
     title ??= parsed.title;
     bodies.push(parsed.body);
     summaries.push(parsed.summary ?? firstSentences(parsed.body));
@@ -208,7 +222,7 @@ async function explainFile(
 }
 
 async function explainGroup(ctx: PromptContext, section: GroupSection, call: Call): Promise<SectionResult> {
-  let reply: string;
+  let reply: Reply;
   try {
     reply = await call(groupMessages(ctx, section), section.title);
   } catch (err) {
@@ -217,8 +231,9 @@ async function explainGroup(ctx: PromptContext, section: GroupSection, call: Cal
     const smaller = { ...ctx, budget: { ...ctx.budget, groupChars: Math.floor(ctx.budget.groupChars / 3) } };
     reply = await call(groupMessages(smaller, section), section.title);
   }
-  const parsed = parseSectionReply(reply);
+  const parsed = parseSectionReply(reply.text);
   if (!parsed.body) throw new LlmError("empty", "The model's answer had no narration in it.");
+  if (reply.truncated) parsed.body = endAtSentence(parsed.body);
   return {
     id: section.id,
     title: sentenceCase(parsed.title ?? section.title),
@@ -230,13 +245,19 @@ async function explainGroup(ctx: PromptContext, section: GroupSection, call: Cal
   };
 }
 
-function halve(chunk: Chunk): Chunk[] {
+/** Splits a part in two for a model with a small context window; null if it can't be split. */
+export function halve(chunk: Chunk): Chunk[] | null {
   const lines = chunk.text.split("\n");
-  const mid = Math.ceil(lines.length / 2);
-  return [
-    { ...chunk, endLine: chunk.startLine + mid - 1, text: lines.slice(0, mid).join("\n") },
-    { ...chunk, startLine: chunk.startLine + mid, text: lines.slice(mid).join("\n") },
-  ];
+  if (lines.length >= 2) {
+    const mid = Math.ceil(lines.length / 2);
+    return [
+      { ...chunk, endLine: chunk.startLine + mid - 1, text: lines.slice(0, mid).join("\n") },
+      { ...chunk, startLine: chunk.startLine + mid, text: lines.slice(mid).join("\n") },
+    ];
+  }
+  // One enormous line (an inlined image, a minified blob): keep its start, which is all a narrator needs.
+  if (chunk.text.length > 8000) return [{ ...chunk, text: `${chunk.text.slice(0, 4000)}\n[… the rest of this very long line is omitted]` }];
+  return null;
 }
 
 function lastParagraph(text: string) {

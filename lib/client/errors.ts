@@ -33,6 +33,17 @@ export function toFriendly(err: unknown): FriendlyError {
   return new FriendlyError("Something went wrong", err instanceof Error ? err.message : String(err));
 }
 
+/**
+ * Finished parts are kept for the same repository and model, so any model
+ * failure can be resumed once its cause is fixed (a new key, more credit, a
+ * model name typo). Repository errors happen before anything is written.
+ */
 export function isResumable(code: string | undefined) {
-  return code === "rate_limit" || code === "server" || code === "network" || code === "empty" || code === "aborted";
+  return !!code && code !== "invalid_url" && code !== "not_found" && code !== "empty" && code !== "too_large";
+}
+
+/** Short advice for the resume button, by failure. */
+export function resumeHint(code: string | undefined): string | null {
+  if (code === "auth" || code === "credits" || code === "model") return "Fix it under Model & key, then resume. Finished parts are kept.";
+  return null;
 }

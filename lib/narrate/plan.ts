@@ -387,7 +387,7 @@ export function buildPlan(ingest: IngestResult, length: NarrationLength = "mediu
           tier: TIER[tier],
           order,
           section: {
-            id: `group:folder:${dir}`,
+            id: `group:folder:${tier}:${dir}`,
             kind: "group",
             chapter: chapterOf(TIER[tier]),
             groupKind: "more",
@@ -463,7 +463,31 @@ export function buildPlan(ingest: IngestResult, length: NarrationLength = "mediu
   }
 
   keyed.sort((a, b) => a.tier - b.tier || a.order - b.order);
-  return { sections: keyed.map((k) => k.section), omitted: [...omitted, ...trivialPaths] };
+
+  // "More of …" groups only round things out: never let them blow the section budget.
+  let sections = keyed.map((k) => k.section);
+  const isOverflow = (sec: PlanSection) => sec.kind === "group" && sec.groupKind === "more" && !sec.id.startsWith("group:folder:");
+  const excess = sections.length - budget.maxSections;
+  if (excess > 0) {
+    const drop = new Set(
+      sections
+        .filter(isOverflow)
+        .sort((a, b) => sectionPaths(a).length - sectionPaths(b).length)
+        .slice(0, excess)
+        .map((sec) => sec.id),
+    );
+    for (const sec of sections) if (drop.has(sec.id)) omitted.push(...sectionPaths(sec));
+    sections = sections.filter((sec) => !drop.has(sec.id));
+  }
+
+  // Section IDs key everything downstream; make sure they're unique.
+  const seen = new Map<string, number>();
+  for (const sec of sections) {
+    const n = seen.get(sec.id) ?? 0;
+    seen.set(sec.id, n + 1);
+    if (n > 0) sec.id = `${sec.id}#${n + 1}`;
+  }
+  return { sections, omitted: [...omitted, ...trivialPaths] };
 }
 
 export function sectionLabel(section: PlanSection): string {

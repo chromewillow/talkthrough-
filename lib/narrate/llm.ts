@@ -24,6 +24,8 @@ export type LlmErrorKind =
 export class LlmError extends Error {
   /** Set when the model hit its token limit before producing any text. */
   outOfRoom = false;
+  /** Set when the error came from the provider itself (so the connection works). */
+  viaProvider = false;
 
   constructor(
     public kind: LlmErrorKind,
@@ -90,38 +92,66 @@ type CallOptions = {
   timeoutMs?: number;
 };
 
-export type ChatResult = { text: string; finishReason: string | null };
+export type ChatResult = {
+  text: string;
+  finishReason: string | null;
+  /** The model hit its token limit mid-answer, even after we gave it more room. */
+  truncated: boolean;
+};
+
+/** The request parameters one attempt was sent with, so concurrent failures don't over-correct. */
+type Sent = { tokenParam: Session["tokenParam"]; sendTemperature: boolean; tokenBoost: number };
 
 export async function chat(settings: LlmSettings, session: Session, messages: ChatMessage[], opts: CallOptions): Promise<ChatResult> {
-  // Up to two quiet retries to adapt request parameters to what the model accepts.
-  for (let adapt = 0; adapt < 4; adapt++) {
+  let last: ChatResult | null = null;
+  // A few quiet retries to adapt request parameters to what the model accepts.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const sent: Sent = { tokenParam: session.tokenParam, sendTemperature: session.sendTemperature, tokenBoost: session.tokenBoost };
     try {
-      return await chatOnce(settings, session, messages, opts);
-    } catch (err) {
-      if (err instanceof LlmError && err.kind === "bad_request" && adaptParams(session, err.message)) continue;
-      // Ran out of room before writing anything: give later requests more.
-      if (err instanceof LlmError && err.outOfRoom && session.tokenParam !== "none" && session.tokenBoost < MAX_TOKEN_BOOST) {
-        session.tokenBoost *= 2;
+      const result = await chatOnce(settings, session, messages, opts);
+      // Cut off mid-answer: give it more room and ask again, if we still can.
+      if (result.finishReason === "length" && growTokens(session, sent)) {
+        last = result;
         continue;
       }
+      return { ...result, truncated: result.finishReason === "length" };
+    } catch (err) {
+      if (err instanceof LlmError && err.kind === "bad_request" && adaptParams(session, sent, err.message)) continue;
+      // Ran out of room before writing anything: give later requests more.
+      if (err instanceof LlmError && err.outOfRoom && growTokens(session, sent)) continue;
       throw err;
     }
   }
-  return chatOnce(settings, session, messages, opts);
+  if (last) return { ...last, truncated: true };
+  return { ...(await chatOnce(settings, session, messages, opts)), truncated: false };
 }
 
-/** Learns from "unsupported parameter" errors. Returns true if something changed. */
-function adaptParams(session: Session, message: string): boolean {
+function growTokens(session: Session, sent: Sent): boolean {
+  if (sent.tokenParam === "none") return false;
+  // Another request already grew it: just try again at the new size.
+  if (session.tokenBoost > sent.tokenBoost) return true;
+  if (session.tokenBoost >= MAX_TOKEN_BOOST) return false;
+  session.tokenBoost *= 2;
+  return true;
+}
+
+/**
+ * Learns from "unsupported parameter" errors. Returns true if the request is
+ * worth retrying. Several requests can fail at once on the same problem, so a
+ * change another request already made counts as a fix, not a reason to escalate.
+ */
+function adaptParams(session: Session, sent: Sent, message: string): boolean {
+  if (session.tokenParam !== sent.tokenParam || session.sendTemperature !== sent.sendTemperature) return true;
   const m = message.toLowerCase();
-  if (session.tokenParam === "max_tokens" && m.includes("max_tokens") && (m.includes("max_completion_tokens") || m.includes("unsupported") || m.includes("not supported"))) {
+  if (sent.tokenParam === "max_tokens" && m.includes("max_tokens") && (m.includes("max_completion_tokens") || m.includes("unsupported") || m.includes("not supported"))) {
     session.tokenParam = "max_completion_tokens";
     return true;
   }
-  if (session.tokenParam === "max_completion_tokens" && m.includes("max_completion_tokens")) {
+  if (sent.tokenParam === "max_completion_tokens" && m.includes("max_completion_tokens") && !m.includes("max_tokens'")) {
     session.tokenParam = "none";
     return true;
   }
-  if (session.sendTemperature && m.includes("temperature")) {
+  if (sent.sendTemperature && m.includes("temperature")) {
     session.sendTemperature = false;
     return true;
   }
@@ -192,18 +222,20 @@ async function chatAttempt(
       if (d.timedOut()) throw new LlmError("server", `${safeHost(baseUrl)} took too long to answer.`);
       if (opts.signal?.aborted) throw new LlmError("aborted", "Stopped.");
       // A TypeError here is usually CORS: the provider won't talk to browsers.
-      // Try once through the relay; if that works, stick with it.
-      session.transport = "relay";
+      // Try once through the relay, and only stick with it if the provider answers that way.
       try {
-        return await chatAttempt(settings, session, messages, opts, d);
+        const viaRelay = await chatAttempt(settings, { ...session, transport: "relay" }, messages, opts, d);
+        session.transport = "relay";
+        return viaRelay;
       } catch (relayErr) {
         if (relayErr instanceof LlmError && relayErr.kind === "network") {
-          session.transport = "direct";
           throw new LlmError(
             "network",
             `We couldn't reach ${safeHost(baseUrl)}. Check the base URL in Settings and your internet connection.`,
           );
         }
+        // The provider answered through the relay (even with an error), so the relay works.
+        if (relayErr instanceof LlmError && relayErr.viaProvider) session.transport = "relay";
         throw relayErr;
       }
     }
@@ -222,7 +254,11 @@ async function chatAttempt(
     }
   }
 
-  if (!res.ok) throw await toError(res, settings, baseUrl);
+  if (!res.ok) {
+    const err = await toError(res, settings, baseUrl);
+    if (res.headers.get("x-talkthrough-relay") !== "refused") err.viaProvider = true;
+    throw err;
+  }
 
   let data: unknown;
   try {
@@ -252,7 +288,7 @@ async function chatAttempt(
     err.outOfRoom = outOfRoom;
     throw err;
   }
-  return { text, finishReason: choice?.finish_reason ?? null };
+  return { text, finishReason: choice?.finish_reason ?? null, truncated: false };
 }
 
 function providerHeaders(settings: LlmSettings, baseUrl: string): Record<string, string> {
@@ -290,9 +326,10 @@ async function toError(res: Response, settings: LlmSettings, baseUrl: string): P
     // Not JSON; keep the text.
   }
   const retryAfter = parseRetryAfter(res.headers);
-  // The relay marks its own refusals so we don't blame the provider.
+  // The relay marks its own refusals so we don't blame the provider. When it
+  // simply couldn't reach the provider, that's a network problem worth retrying.
   if (res.headers.get("x-talkthrough-relay") === "refused") {
-    return new LlmError("bad_request", message || "The relay refused this request.", res.status);
+    return new LlmError(res.status >= 500 ? "network" : "bad_request", message || "The relay refused this request.", res.status);
   }
   return classify(res.status, String(message).slice(0, 600), settings, baseUrl, retryAfter);
 }

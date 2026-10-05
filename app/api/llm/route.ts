@@ -1,4 +1,4 @@
-import { checkRelayTarget } from "@/lib/server/relay-guard";
+import { chatEndpoint, checkRelayTarget, readBodyLimited, RelayConnectError, relayPost } from "@/lib/server/relay-guard";
 
 /**
  * A stateless relay for model providers that refuse requests from browsers
@@ -22,41 +22,43 @@ function refuse(status: number, message: string) {
 export async function POST(request: Request) {
   const auth = request.headers.get("authorization");
   if (!auth) return refuse(401, "Missing API key.");
-
-  const length = Number(request.headers.get("content-length") ?? 0);
-  if (length > MAX_BODY_BYTES) return refuse(413, "That request is too large to relay.");
+  if (Number(request.headers.get("content-length") ?? 0) > MAX_BODY_BYTES) {
+    return refuse(413, "That request is too large to relay.");
+  }
 
   let body: { baseUrl?: unknown; payload?: unknown };
   try {
-    const text = await request.text();
-    if (text.length > MAX_BODY_BYTES) return refuse(413, "That request is too large to relay.");
+    const text = await readBodyLimited(request, MAX_BODY_BYTES);
+    if (text === null) return refuse(413, "That request is too large to relay.");
     body = JSON.parse(text);
   } catch {
     return refuse(400, "The relay expects a JSON body.");
   }
-  if (!body.payload || typeof body.payload !== "object") return refuse(400, "Missing request payload.");
+  if (!body.payload || typeof body.payload !== "object" || Array.isArray(body.payload)) {
+    return refuse(400, "Missing request payload.");
+  }
 
-  const target = await checkRelayTarget(body.baseUrl);
+  const selfHost = request.headers.get("host") ?? new URL(request.url).host;
+  const target = checkRelayTarget(body.baseUrl, selfHost);
   if (typeof target === "string") return refuse(400, target);
 
-  const endpoint = `${target.toString().replace(/\/+$/, "")}/chat/completions`;
-  let upstream: Response;
+  let upstream;
   try {
-    upstream = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: auth },
-      body: JSON.stringify(body.payload),
-      redirect: "manual",
-      signal: request.signal,
-      cache: "no-store",
-    });
-  } catch {
+    upstream = await relayPost(
+      chatEndpoint(target),
+      { "Content-Type": "application/json", Accept: "application/json", Authorization: auth },
+      JSON.stringify(body.payload),
+      request.signal,
+    );
+  } catch (err) {
     if (request.signal.aborted) return new Response(null, { status: 499 });
+    if (err instanceof RelayConnectError && err.reason === "private") return refuse(400, err.message);
+    // The provider couldn't be reached: a network problem, worth retrying.
     return refuse(502, `Couldn't connect to ${target.host}. Check the base URL.`);
   }
 
   if (upstream.status >= 300 && upstream.status < 400) {
-    await upstream.body?.cancel();
+    await upstream.body.cancel();
     return refuse(502, `${target.host} tried to redirect the request. Check the base URL — it may need a /v1 at the end.`);
   }
 

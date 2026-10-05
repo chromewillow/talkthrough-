@@ -25,7 +25,7 @@ const SPEEDS = [1, 2, 4, 6];
 export function SettingsPanel({ value, onChange, open, onOpenChange, needsKey }: Props) {
   const ids = { base: useId(), key: useId(), model: useId(), models: useId(), remember: useId() };
   const [showKey, setShowKey] = useState(false);
-  const models = useModelList(open ? value.baseUrl : "", value.apiKey);
+  const models = useModelList(open ? value.baseUrl : "");
   const host = safeHost(normaliseBaseUrl(value.baseUrl) || "—");
   const preset = PRESETS.find((p) => normaliseBaseUrl(p.baseUrl) === normaliseBaseUrl(value.baseUrl));
   const set = (patch: Partial<StoredSettings>) => onChange({ ...value, ...patch });
@@ -203,21 +203,29 @@ function Field({ label, htmlFor, hint, children }: { label: string; htmlFor: str
   );
 }
 
-/** Asks the provider which models exist, for autocomplete. Failures are silent. */
-function useModelList(baseUrl: string, apiKey: string): string[] {
+/**
+ * Asks the provider which models exist, for autocomplete. The API key is never
+ * sent here: this runs as you type or switch presets, before you've pressed
+ * Generate, and the key belongs only to the provider you actually use. Most
+ * providers list models without one; for the rest, autocomplete just stays off.
+ */
+function useModelList(baseUrl: string): string[] {
   const [models, setModels] = useState<{ key: string; list: string[] }>({ key: "", list: [] });
   const url = normaliseBaseUrl(baseUrl);
-  const cacheKey = `${url}|${apiKey ? "k" : ""}`;
+  const complete = (() => {
+    try {
+      return /\.[a-z]{2,}$|^localhost$|^[\d.]+$/i.test(new URL(url).hostname);
+    } catch {
+      return false;
+    }
+  })();
 
   useEffect(() => {
-    if (!url || models.key === cacheKey) return;
+    if (!url || !complete || models.key === url) return;
     const controller = new AbortController();
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`${url}/models`, {
-          headers: apiKey.trim() ? { Authorization: `Bearer ${apiKey.trim()}` } : {},
-          signal: controller.signal,
-        });
+        const res = await fetch(`${url}/models`, { signal: controller.signal, credentials: "omit" });
         if (!res.ok) return;
         const json = (await res.json()) as { data?: { id?: string }[] };
         const list = (json.data ?? [])
@@ -225,16 +233,16 @@ function useModelList(baseUrl: string, apiKey: string): string[] {
           .filter((id): id is string => typeof id === "string")
           .sort()
           .slice(0, 600);
-        setModels({ key: cacheKey, list });
+        setModels({ key: url, list });
       } catch {
         // CORS, offline or no /models endpoint: autocomplete is optional.
       }
-    }, 500);
+    }, 800);
     return () => {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [url, apiKey, cacheKey, models.key]);
+  }, [url, complete, models.key]);
 
-  return models.key === cacheKey ? models.list : [];
+  return models.key === url ? models.list : [];
 }

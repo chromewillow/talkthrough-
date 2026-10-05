@@ -44,3 +44,10 @@ describe("parseRepoUrl", () => {
     expect(() => parseRepoUrl(input)).toThrow(RepoUrlError);
   });
 });
+
+describe("parseRepoUrl safety", () => {
+  it("refuses encoded slashes and dot segments in branch links", () => {
+    expect(() => parseRepoUrl("https://github.com/vercel/ai-chatbot/tree/..%2f..%2fcoderamp-labs%2fgitingest")).toThrow(RepoUrlError);
+    expect(() => parseRepoUrl("https://github.com/a/b/tree/main/../../x")).not.toThrow(); // the URL parser already resolves these
+  });
+});

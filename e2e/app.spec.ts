@@ -27,8 +27,8 @@ test("turns a repository into a listening script", async ({ page, context }) => 
   await expect(page.getByRole("button", { name: "Copied" })).toBeVisible();
   const script = await page.evaluate(() => navigator.clipboard.readText());
   expect(script.startsWith("A guided tour of notes app.")).toBe(true);
-  expect(script).toContain("Part one.");
-  expect(script).toContain("Finally. Where to go when you want to change something.");
+  expect(script).toContain("Chapter one. Where it all starts.");
+  expect(script).toContain("Last stop. Where to go when you want to change something.");
   expect(script).not.toMatch(/[#*`]/);
 
   const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Download as Markdown" }).click()]);

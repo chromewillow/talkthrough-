@@ -219,7 +219,7 @@ function categorize(path: string, hints: ProjectHints): FileCategory {
     return CODE_EXTS.has(ext) ? "helper" : "docs";
   }
   if (STYLE_EXTS.has(ext) || /\.css\.(ts|js)$/.test(lower)) return "style";
-  if (hasDir(path, ["scripts", "script", "tools", "tooling", "bin"]) && !hasDir(path, ["src", "lib", "app"])) {
+  if ((hasDir(path, ["scripts", "script", "bin"]) && !hasDir(path, ["src", "lib", "app"])) || /^(tools|tooling)\//i.test(path)) {
     return "script";
   }
   if (["sh", "bash", "zsh", "fish", "ps1", "bat", "cmd"].includes(ext)) return "script";
@@ -327,12 +327,13 @@ function isEntryByPath(path: string, hints: ProjectHints, allPaths: Set<string>)
 
 // ─── Imports ────────────────────────────────────────────────────────────────
 
+// Every repetition is bounded, so a crafted file can't make these scans quadratic.
 const JS_IMPORT_RE =
-  /(?:^|[^\w$.])(?:import|export)\s+(?:type\s+)?[^'"`;]*?\sfrom\s*['"]([^'"\n]+)['"]|(?:^|[^\w$.])import\s*['"]([^'"\n]+)['"]|(?:^|[^\w$.])require\(\s*['"]([^'"\n]+)['"]\s*\)|(?:^|[^\w$.])import\(\s*['"]([^'"\n]+)['"]\s*\)/g;
+  /(?:^|[^\w$.])(?:import|export)\s+(?:type\s+)?[^'"`;]{0,400}?\sfrom\s*['"]([^'"\n]{1,300})['"]|(?:^|[^\w$.])import\s*['"]([^'"\n]{1,300})['"]|(?:^|[^\w$.])require\(\s*['"]([^'"\n]{1,300})['"]\s*\)|(?:^|[^\w$.])import\(\s*['"]([^'"\n]{1,300})['"]\s*\)/g;
 const CSS_IMPORT_RE = /@(?:import|use|forward)\s+(?:url\()?\s*['"]([^'"]+)['"]/g;
 const PY_IMPORT_RE = /^[ \t]*import[ \t]+([\w.]+(?:[ \t]*,[ \t]*[\w.]+)*)/gm;
 const PY_FROM_RE = /^[ \t]*from[ \t]+(\.*[\w.]*)[ \t]+import[ \t]+(\([^)]*\)|[^\n#]+)/gm;
-const GO_IMPORT_BLOCK_RE = /import\s*\(([\s\S]*?)\)/g;
+const GO_IMPORT_BLOCK_RE = /import\s*\(([^)]{0,8000})\)/g;
 const GO_IMPORT_LINE_RE = /import\s+(?:[\w.]+\s+)?"([^"]+)"/g;
 const RUBY_REQUIRE_RE = /require(_relative)?\s*\(?\s*['"]([^'"]+)['"]/g;
 const RUST_MOD_RE = /^\s*(?:pub(?:\([\w:]+\))?\s+)?mod\s+(\w+)\s*;/gm;
@@ -366,7 +367,8 @@ function join(dir: string, rel: string): string | null {
 
 type Resolver = {
   paths: Set<string>;
-  aliases: { prefix: string; targets: string[] }[];
+  /** Path aliases, each scoped to the folder of the tsconfig that declared it ("" for defaults). */
+  aliases: { prefix: string; targets: string[]; scope: string; fallback?: boolean }[];
   baseUrls: string[];
   goModule: string | null;
   goDirs: Map<string, string[]>;
@@ -399,7 +401,12 @@ function resolveJsSpecifier(from: string, spec: string, r: Resolver): string | n
     const joined = normalize(clean);
     return joined ? resolveJsLike(joined, r) : null;
   }
-  for (const { prefix, targets } of r.aliases) {
+  // In a monorepo each package has its own aliases: use the nearest tsconfig's first.
+  const inScope = (scope: string) => !scope || from.startsWith(`${scope}/`);
+  const applicable = r.aliases
+    .filter((a) => a.fallback || inScope(a.scope))
+    .sort((a, b) => Number(a.fallback ?? false) - Number(b.fallback ?? false) || b.scope.length - a.scope.length || b.prefix.length - a.prefix.length);
+  for (const { prefix, targets } of applicable) {
     if (clean === prefix || clean.startsWith(prefix.endsWith("/") ? prefix : `${prefix}/`) || (prefix.endsWith("/") && clean.startsWith(prefix))) {
       const rest = clean.slice(prefix.length).replace(/^\//, "");
       for (const t of targets) {
@@ -457,7 +464,7 @@ function extractImports(file: RawFile, r: Resolver): string[] {
     }
     if (ext === "html") {
       // Vite-style apps: <script type="module" src="/src/main.tsx">, rooted at the HTML file's folder.
-      for (const m of text.matchAll(/<(?:script|link)[^>]+(?:src|href)=["']([^"':]+)["']/g)) {
+      for (const m of text.matchAll(/<(?:script|link)[^>]{1,500}?(?:src|href)=["']([^"':]{1,300})["']/g)) {
         const joined = join(dirOf(file.path), m[1].replace(/^\//, ""));
         if (joined !== null) add(resolveJsLike(joined, r));
       }
@@ -657,17 +664,16 @@ function buildResolver(files: RawFile[]): { resolver: Resolver; hints: ProjectHi
         const prefix = key.replace(/\*$/, "");
         aliases.push({
           prefix,
+          scope: dir,
           targets: targets.map((t) => normalize(join(baseUrl, String(t).replace(/\*$/, "")) ?? "") ?? "").filter((t) => t !== null),
         });
       }
     }
   }
-  // Common aliases even without a tsconfig (Vite, Nuxt, SvelteKit conventions).
-  if (!aliases.some((a) => a.prefix === "@/")) aliases.push({ prefix: "@/", targets: ["src", ""] });
-  if (!aliases.some((a) => a.prefix === "~/")) aliases.push({ prefix: "~/", targets: ["src", "app", ""] });
-  if (!aliases.some((a) => a.prefix === "$lib/")) aliases.push({ prefix: "$lib/", targets: ["src/lib"] });
-  // Longest prefixes first so "@/components/" beats "@/".
-  aliases.sort((a, b) => b.prefix.length - a.prefix.length);
+  // Common aliases even without a tsconfig (Vite, Nuxt, SvelteKit conventions), tried last.
+  aliases.push({ prefix: "@/", targets: ["src", ""], scope: "", fallback: true });
+  aliases.push({ prefix: "~/", targets: ["src", "app", ""], scope: "", fallback: true });
+  aliases.push({ prefix: "$lib/", targets: ["src/lib"], scope: "", fallback: true });
 
   // Go module path.
   let goModule: string | null = null;
@@ -742,7 +748,7 @@ function declaredEntries(files: RawFile[], r: Resolver, packageJsons: { path: st
 
   for (const f of files) {
     if (basenameOf(f.path) !== "index.html") continue;
-    for (const m of f.content.matchAll(/<script[^>]+src=["']([^"':]+)["']/g)) {
+    for (const m of f.content.matchAll(/<script[^>]{1,500}?src=["']([^"':]{1,300})["']/g)) {
       const spec = m[1].replace(/^\//, "");
       tryAdd(dirOf(f.path), spec);
     }
@@ -811,6 +817,8 @@ export function analyzeFiles(raw: RawFile[]): RepoFile[] {
 
   const files: RepoFile[] = raw.map((f) => {
     let category = categorize(f.path, hints);
+    // A "script" the app itself imports (an agent's tools folder, say) is app code.
+    if (category === "script" && (importedBy.get(f.path) ?? []).some((p) => categorize(p, hints) !== "script")) category = "core";
     const isEntry =
       category !== "test" &&
       category !== "config" &&

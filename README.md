@@ -49,9 +49,10 @@ Optional environment variables:
 
 | Variable | What it does |
 | --- | --- |
-| `TALKTHROUGH_GITHUB_TOKEN` | A GitHub token for the server to download repositories through the authenticated API (higher limits; the groundwork for private repos). Not needed for public repos. |
+| `TALKTHROUGH_GITHUB_TOKEN` | A GitHub token for the server to download repositories through the authenticated API (higher limits; the groundwork for private repos). Not needed for public repos. Talkthrough still only serves public repositories, even if the token can read private ones. |
 | `TALKTHROUGH_CODELOAD_BASE` | Point repository downloads at another server — used by tests with a local stand-in for GitHub. |
 | `TALKTHROUGH_RELAY_ALLOW_HTTP` | Set to `1` to let the relay reach plain `http://` endpoints (it already does in development). |
+| `TALKTHROUGH_RELAY_ALLOW_PRIVATE` | Set to `1` to let the relay reach private and local network addresses. Only for self-hosting next to your own model server; never on a public deployment. |
 
 ### Testing without real services
 

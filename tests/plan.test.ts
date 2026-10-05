@@ -91,6 +91,22 @@ describe("tour order and chapters", () => {
   });
 });
 
+describe("section ids", () => {
+  it("stays unique when one folder has small files in two tiers", () => {
+    const ingest = ingestOf({
+      "src/main.ts": `import "./lib/db";\n${lines(40)}`,
+      "src/lib/db.ts": lines(20),
+      "src/lib/auth.ts": lines(20),
+      "src/lib/api.ts": lines(20),
+      "src/lib/utils.ts": lines(20),
+      "src/lib/types.ts": lines(20),
+      "src/lib/constants.ts": lines(20),
+    });
+    const ids = buildPlan(ingest).sections.map((s) => s.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
 describe("chunkContent", () => {
   it("leaves short files whole and splits long ones at top-level boundaries", () => {
     expect(chunkContent("a\nb", 100)).toHaveLength(1);

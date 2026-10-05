@@ -6,7 +6,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { isResumable, toFriendly } from "@/lib/client/errors";
+import { isResumable, resumeHint, toFriendly } from "@/lib/client/errors";
 import { loadLast, saveLast } from "@/lib/client/history";
 import { FriendlyError, ingest } from "@/lib/client/ingest";
 import { runKey, runReducer } from "@/lib/client/run-state";
@@ -152,12 +152,12 @@ export function TalkthroughApp() {
   return (
     <main className="mx-auto flex w-full max-w-[44rem] flex-col px-4 pt-8 pb-28 sm:px-8 sm:pt-14">
       <header className="flex items-center justify-between">
-        <span className="font-serif text-[1.375rem] leading-none tracking-[-0.01em] text-soft-white">Talkthrough</span>
+        <span className="font-display text-[1.25rem] leading-none font-medium tracking-[-0.02em] text-soft-white">Talkthrough</span>
         <span className="label-caps">Code, narrated</span>
       </header>
 
       <section className="pt-16 pb-10 sm:pt-24 sm:pb-12">
-        <h1 className="text-balance font-serif text-[2.75rem] leading-[1.02] tracking-[-0.015em] text-soft-white sm:text-[4rem]">
+        <h1 className="text-balance font-display text-[2.5rem] leading-[1.06] font-medium tracking-[-0.03em] text-soft-white sm:text-[3.75rem]">
           Hear what your code <em className="text-periwinkle">is actually doing.</em>
         </h1>
         <p className="mt-6 max-w-[34rem] text-pretty text-[1.0625rem] leading-relaxed text-muted-foreground">
@@ -249,8 +249,9 @@ export function TalkthroughApp() {
       {run?.phase === "failed" && run.error && (
         <div role="alert" className="panel mt-6 border-l-2 border-l-destructive/50 p-5 sm:p-6">
           <p className="label-caps text-destructive/80">Couldn&apos;t finish</p>
-          <p className="mt-2 font-serif text-2xl text-soft-white">{run.error.title}</p>
+          <p className="mt-2 font-display text-[1.375rem] font-medium tracking-[-0.01em] text-soft-white">{run.error.title}</p>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{run.error.message}</p>
+          {canResume && resumeHint(run.error.code) && <p className="mt-3 text-[0.8125rem] text-faint">{resumeHint(run.error.code)}</p>}
           {canResume && <ResumeButton onClick={() => void generate(true)} />}
         </div>
       )}
@@ -266,7 +267,7 @@ export function TalkthroughApp() {
           {STEPS.map((step, i) => (
             <li key={step.title}>
               <span className="font-mono text-[0.6875rem] text-gold/70">0{i + 1}</span>
-              <p className="mt-2 font-serif text-[1.375rem] leading-tight text-soft-white">{step.title}</p>
+              <p className="mt-2 font-display text-[1.1875rem] leading-tight font-medium tracking-[-0.01em] text-soft-white">{step.title}</p>
               <p className="mt-2 text-[0.875rem] leading-relaxed text-muted-foreground">{step.body}</p>
             </li>
           ))}
@@ -291,7 +292,7 @@ export function TalkthroughApp() {
 
       <footer className="mt-24 flex flex-col gap-2 border-t border-border pt-6 text-[0.75rem] text-faint sm:flex-row sm:items-center sm:justify-between">
         <span>
-          <span className="font-serif text-[0.9375rem] text-muted-foreground">Talkthrough</span> · bring your own model · your key stays in
+          <span className="font-display font-medium text-muted-foreground">Talkthrough</span> · bring your own model · your key stays in
           your browser
         </span>
         <a

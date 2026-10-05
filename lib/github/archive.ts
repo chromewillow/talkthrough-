@@ -11,7 +11,7 @@ import "server-only";
 
 export class ArchiveError extends Error {
   constructor(
-    public code: "not_found" | "rate_limited" | "unreachable" | "too_large",
+    public code: "not_found" | "rate_limited" | "unreachable" | "too_large" | "misconfigured",
     message: string,
   ) {
     super(message);
@@ -45,6 +45,8 @@ export async function fetchRepoArchive(req: ArchiveRequest): Promise<ReadableStr
   if (token) {
     headers.Authorization = `Bearer ${token}`;
     headers.Accept = "application/vnd.github+json";
+    // A server token may be able to read private repositories; only ever serve public ones.
+    await assertPublic(owner, repo, headers, signal);
   }
 
   let res: Response;
@@ -55,6 +57,10 @@ export async function fetchRepoArchive(req: ArchiveRequest): Promise<ReadableStr
     throw new ArchiveError("unreachable", "We couldn't reach GitHub just now. Give it a moment and try again.");
   }
 
+  if (token && res.status === 401) {
+    await res.body?.cancel();
+    throw new ArchiveError("misconfigured", "This server's GitHub token isn't valid. If you run this site, update TALKTHROUGH_GITHUB_TOKEN.");
+  }
   if (res.status === 404 || res.status === 401 || (res.status === 403 && !isRateLimit(res))) {
     await res.body?.cancel();
     throw new ArchiveError(
@@ -80,9 +86,34 @@ export async function fetchRepoArchive(req: ArchiveRequest): Promise<ReadableStr
 }
 
 function isRateLimit(res: Response) {
-  return res.status === 403 && res.headers.get("x-ratelimit-remaining") === "0";
+  return res.status === 403 && (res.headers.get("x-ratelimit-remaining") === "0" || res.headers.has("retry-after"));
 }
 
+async function assertPublic(owner: string, repo: string, headers: Record<string, string>, signal?: AbortSignal) {
+  let res: Response;
+  try {
+    res = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers, signal, cache: "no-store" });
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    throw new ArchiveError("unreachable", "We couldn't reach GitHub just now. Give it a moment and try again.");
+  }
+  if (res.status === 401) throw new ArchiveError("misconfigured", "This server's GitHub token isn't valid. If you run this site, update TALKTHROUGH_GITHUB_TOKEN.");
+  if (res.status === 429 || isRateLimit(res)) throw new ArchiveError("rate_limited", "GitHub is rate-limiting downloads right now. Wait a minute and try again.");
+  const info = res.ok ? ((await res.json()) as { private?: boolean }) : null;
+  if (!info || info.private !== false) {
+    throw new ArchiveError(
+      "not_found",
+      "We couldn't find a public GitHub repository at that address. Check the link, and note that private repositories aren't supported yet.",
+    );
+  }
+}
+
+/** The download itself is too big: a subfolder link wouldn't help, since GitHub sends the whole archive. */
 export function tooLargeMessage() {
-  return "That repository is too big to read in one go (over 150 MB compressed). Try pointing at a subfolder — paste a link like github.com/owner/repo/tree/main/src.";
+  return "That repository is too big to download in one go (over 150 MB compressed, usually because of large assets or history-heavy files).";
+}
+
+/** Too many files to walk: a subfolder link does help here. */
+export function tooManyFilesMessage() {
+  return "That repository has too many files to narrate in one go. Try pointing at a subfolder — paste a link like github.com/owner/repo/tree/main/src.";
 }

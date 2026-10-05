@@ -1,0 +1,259 @@
+/**
+ * Runs a whole walkthrough in the browser: explain every planned section with
+ * a few requests in flight, then write the overview and the closing guide
+ * from those explanations. Finished sections are reported as they land, so a
+ * failed run can resume without paying for them twice.
+ */
+import type { IngestResult } from "@/lib/ingest/types";
+import { chat, isFatal, LlmError, newSession, withRetries, type LlmErrorKind, type Session, type Transport } from "./llm";
+import { sectionLabel, sectionPaths } from "./plan";
+import { buildContext, closingMessages, fileMessages, groupMessages, overviewMessages, type ChatMessage, type PromptContext } from "./prompts";
+import { firstSentences, normaliseParagraphs, parseSectionReply, toSpeakable } from "./speakable";
+import type { Chunk, FileSection, GroupSection, LlmSettings, NarrationOptions, NarrationPlan, PlanSection, SectionResult, Walkthrough } from "./types";
+
+export type PipelineEvent =
+  | { type: "phase"; phase: "explaining" | "overview" }
+  | { type: "section-start"; id: string }
+  | { type: "section-part"; id: string; part: number; total: number }
+  | { type: "section-done"; result: SectionResult }
+  | { type: "section-failed"; id: string; message: string }
+  | { type: "retry"; label: string; waitMs: number; reason: LlmErrorKind }
+  | { type: "transport"; transport: Transport };
+
+export type RunInput = {
+  ingest: IngestResult;
+  plan: NarrationPlan;
+  settings: LlmSettings;
+  options: NarrationOptions;
+  /** Sections finished by an earlier attempt. */
+  done?: Record<string, SectionResult>;
+  signal: AbortSignal;
+  onEvent: (e: PipelineEvent) => void;
+  session?: Session;
+  /** Set false to stop after the per-file sections (no overview or closing). */
+  includeOverview?: boolean;
+};
+
+export type RunOutcome =
+  | { status: "complete"; walkthrough: Walkthrough }
+  | { status: "sections"; sections: SectionResult[] }
+  | { status: "failed"; error: LlmError; failed: string[] };
+
+const MAX_TOKENS = 4096;
+/** Consecutive sections that may fail on transient errors before we stop and let the user resume. */
+const MAX_CONSECUTIVE_FAILURES = 3;
+
+export async function runWalkthrough(input: RunInput): Promise<RunOutcome> {
+  const { ingest, plan, settings, options, onEvent } = input;
+  const ctx = buildContext(ingest, plan, options.length);
+  const session = input.session ?? newSession();
+  const results: Record<string, SectionResult> = { ...input.done };
+
+  // Our own controller, so a fatal error can stop every request in flight.
+  const controller = new AbortController();
+  const onOuterAbort = () => controller.abort();
+  input.signal.addEventListener("abort", onOuterAbort, { once: true });
+  const signal = controller.signal;
+
+  let lastTransport = session.transport;
+  const call = async (messages: ChatMessage[], label: string, temperature = 0.6) => {
+    const result = await withRetries(() => chat(settings, session, messages, { maxTokens: MAX_TOKENS, temperature, signal }), {
+      signal,
+      onRetry: ({ waitMs, error }) => onEvent({ type: "retry", label, waitMs, reason: error.kind }),
+    });
+    if (session.transport !== lastTransport) {
+      lastTransport = session.transport;
+      onEvent({ type: "transport", transport: session.transport });
+    }
+    return result.text;
+  };
+
+  try {
+    onEvent({ type: "phase", phase: "explaining" });
+    const queue = plan.sections.filter((s) => !results[s.id]);
+    const failed: string[] = [];
+    let fatal: LlmError | null = null;
+    let consecutiveFailures = 0;
+    let lastTransientError: LlmError | null = null;
+
+    const worker = async () => {
+      while (queue.length && !fatal && !signal.aborted) {
+        const section = queue.shift()!;
+        onEvent({ type: "section-start", id: section.id });
+        try {
+          const result =
+            section.kind === "file" ? await explainFile(ctx, section, call, onEvent) : await explainGroup(ctx, section, call);
+          results[section.id] = result;
+          consecutiveFailures = 0;
+          onEvent({ type: "section-done", result });
+        } catch (err) {
+          const e = err instanceof LlmError ? err : new LlmError("server", err instanceof Error ? err.message : String(err));
+          if (isFatal(e)) {
+            fatal ??= e;
+            controller.abort();
+            return;
+          }
+          // Cancelled because the run stopped: not this section's fault.
+          if (signal.aborted) return;
+          failed.push(section.id);
+          onEvent({ type: "section-failed", id: section.id, message: e.message });
+          lastTransientError = e;
+          if (++consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            fatal ??= e;
+            controller.abort();
+            return;
+          }
+        }
+      }
+    };
+
+    const workers = Math.max(1, Math.min(options.concurrency, queue.length || 1));
+    await Promise.all(Array.from({ length: workers }, worker));
+
+    if (input.signal.aborted) return { status: "failed", error: new LlmError("aborted", "Stopped."), failed };
+    if (fatal) {
+      const pending = plan.sections.filter((s) => !results[s.id]).map((s) => s.id);
+      return { status: "failed", error: fatal, failed: pending };
+    }
+
+    const ordered = plan.sections.map((s) => results[s.id]).filter((r): r is SectionResult => Boolean(r));
+    if (ordered.length === 0 || ordered.length < plan.sections.length / 2) {
+      const error: LlmError =
+        lastTransientError ?? new LlmError("server", "Most of the files couldn't be explained. Try again in a moment.");
+      return { status: "failed", error, failed };
+    }
+
+    if (input.includeOverview === false) return { status: "sections", sections: ordered };
+
+    onEvent({ type: "phase", phase: "overview" });
+    const [overviewRaw, closingRaw] = await Promise.all([
+      call(overviewMessages(ctx, ordered), "the overview", 0.5),
+      call(closingMessages(ctx, ordered), "the closing guide", 0.5),
+    ]);
+
+    const walkthrough: Walkthrough = {
+      repo: ingest.repo,
+      model: settings.model,
+      createdAt: new Date().toISOString(),
+      title: `A guided tour of ${ingest.repo.repo}`,
+      overview: cleanProse(overviewRaw),
+      closing: cleanProse(closingRaw),
+      sections: ordered,
+      missing: plan.sections.filter((s) => !results[s.id]).map((s) => ({ id: s.id, label: sectionLabel(s) })),
+    };
+    return { status: "complete", walkthrough };
+  } catch (err) {
+    if (input.signal.aborted) return { status: "failed", error: new LlmError("aborted", "Stopped."), failed: [] };
+    const e = err instanceof LlmError ? err : new LlmError("server", err instanceof Error ? err.message : String(err));
+    return { status: "failed", error: e, failed: [] };
+  } finally {
+    input.signal.removeEventListener("abort", onOuterAbort);
+  }
+}
+
+type Call = (messages: ChatMessage[], label: string, temperature?: number) => Promise<string>;
+
+/** Strips any title/summary lines a model adds to free-form prose. */
+function cleanProse(raw: string): string {
+  const parsed = parseSectionReply(raw);
+  return parsed.body || normaliseParagraphs(toSpeakable(raw));
+}
+
+async function explainFile(
+  ctx: PromptContext,
+  section: FileSection,
+  call: Call,
+  onEvent: (e: PipelineEvent) => void,
+): Promise<SectionResult> {
+  const bodies: string[] = [];
+  const summaries: string[] = [];
+  let title: string | null = null;
+  let chunks = section.chunks;
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    if (chunks.length > 1) onEvent({ type: "section-part", id: section.id, part: i + 1, total: chunks.length });
+    const earlier = summaries.map((s, n) => `Part ${n + 1}: ${s}`);
+    if (bodies.length) earlier.push(`The previous part ended with: "${lastParagraph(bodies[bodies.length - 1])}"`);
+    let reply: string;
+    try {
+      reply = await call(fileMessages(ctx, section, chunk, earlier), section.path);
+    } catch (err) {
+      // Too long for this model's context window: split this part in two and carry on.
+      if (err instanceof LlmError && err.kind === "context" && chunk.text.length > 4000 && chunks.length < 24) {
+        chunks = [...chunks.slice(0, i), ...halve(chunk), ...chunks.slice(i + 1)].map((c, index, all) => ({ ...c, index, total: all.length }));
+        i--;
+        continue;
+      }
+      throw err;
+    }
+    const parsed = parseSectionReply(reply);
+    if (!parsed.body) throw new LlmError("empty", "The model's answer had no narration in it.");
+    title ??= parsed.title;
+    bodies.push(parsed.body);
+    summaries.push(parsed.summary ?? firstSentences(parsed.body));
+  }
+
+  return {
+    id: section.id,
+    title: title ?? fallbackTitle(section.path),
+    body: bodies.join("\n\n"),
+    summary: summaries.length > 1 ? summaries.map((s) => firstSentences(s, 1)).join(" ") : summaries[0],
+    paths: [section.path],
+  };
+}
+
+async function explainGroup(ctx: PromptContext, section: GroupSection, call: Call): Promise<SectionResult> {
+  let reply: string;
+  try {
+    reply = await call(groupMessages(ctx, section), section.title);
+  } catch (err) {
+    if (!(err instanceof LlmError && err.kind === "context")) throw err;
+    // Show less of each file and try once more.
+    const smaller = { ...ctx, budget: { ...ctx.budget, groupChars: Math.floor(ctx.budget.groupChars / 3) } };
+    reply = await call(groupMessages(smaller, section), section.title);
+  }
+  const parsed = parseSectionReply(reply);
+  if (!parsed.body) throw new LlmError("empty", "The model's answer had no narration in it.");
+  return {
+    id: section.id,
+    title: parsed.title ?? section.title,
+    body: parsed.body,
+    summary: parsed.summary ?? firstSentences(parsed.body),
+    paths: sectionPaths(section),
+  };
+}
+
+function halve(chunk: Chunk): Chunk[] {
+  const lines = chunk.text.split("\n");
+  const mid = Math.ceil(lines.length / 2);
+  return [
+    { ...chunk, endLine: chunk.startLine + mid - 1, text: lines.slice(0, mid).join("\n") },
+    { ...chunk, startLine: chunk.startLine + mid, text: lines.slice(mid).join("\n") },
+  ];
+}
+
+function lastParagraph(text: string) {
+  const paras = text.split(/\n{2,}/);
+  const last = paras[paras.length - 1] ?? "";
+  return last.length > 600 ? `…${last.slice(-600)}` : last;
+}
+
+/** "app/(chat)/api/chat/route.ts" → "The route file in the chat folder". */
+export function fallbackTitle(path: string): string {
+  const parts = path.split("/");
+  const file = parts[parts.length - 1].replace(/\.[^.]+$/, "");
+  const folder = [...parts.slice(0, -1)].reverse().find((p) => !/^[([]/.test(p));
+  const human = (s: string) =>
+    s
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .replace(/[-_.]+/g, " ")
+      .trim()
+      .toLowerCase();
+  return folder ? `The ${human(file)} file in ${human(folder)}` : `The ${human(file)} file`;
+}
+
+export function sectionsFor(plan: NarrationPlan, ids: string[]): PlanSection[] {
+  const set = new Set(ids);
+  return plan.sections.filter((s) => set.has(s.id));
+}

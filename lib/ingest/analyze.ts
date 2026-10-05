@@ -228,7 +228,12 @@ function categorize(path: string, hints: ProjectHints): FileCategory {
   // Routes and pages: the surface of the app.
   if (isRouteFile(path, hints)) return "route";
 
-  if (DATA_EXTS.has(ext)) return "data";
+  if (DATA_EXTS.has(ext)) {
+    // Settings files at the top of the project are configuration, not data.
+    return !path.includes("/") || lower.startsWith(".") || /^taskfile\./.test(lower) ? "config" : "data";
+  }
+  // Browser scripts served as static files belong with the interface.
+  if (hasDir(path, ["static", "public", "assets", "www"]) && CODE_EXTS.has(ext)) return "component";
   if (TEMPLATE_EXTS.has(ext)) return "component";
 
   if (
@@ -761,7 +766,7 @@ const CATEGORY_WEIGHT: Record<FileCategory, number> = {
   entry: 30,
   route: 18,
   core: 16,
-  component: 9,
+  component: 12,
   helper: 6,
   script: 2,
   style: 1,
@@ -781,8 +786,10 @@ function importanceOf(f: Omit<RepoFile, "importance" | "content">): number {
   const surface = f.category === "route" || f.isEntry;
   score += Math.min(surface ? 24 : 14, f.imports.length * 2);
   if (f.category === "route" && /(^|\/)api\//.test(f.path) && f.lines > 60) score += 8;
-  if (f.lines >= 20 && f.lines <= 800) score += 8;
+  if (f.lines >= 20) score += 8;
   else if (f.lines < 8) score -= 6;
+  // Substantial files carry more of the app's behaviour.
+  if (f.lines > 60) score += Math.min(12, Math.round(Math.log2(f.lines / 60) * 4));
   const depth = f.path.split("/").length - 1;
   score -= Math.max(0, depth - 2) * 2;
   if (NAME_SIGNAL.test(f.path)) score += 4;

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { analyzeFiles } from "@/lib/ingest/analyze";
 import type { IngestResult } from "@/lib/ingest/types";
 import { buildPlan, chunkContent, isTrivial } from "@/lib/narrate/plan";
+import { coreTerms, collectDeps } from "@/lib/narrate/prompts";
+import { sentenceCase } from "@/lib/narrate/pipeline";
 
 const lines = (n: number, prefix = "const x") => Array.from({ length: n }, (_, i) => `${prefix}${i} = ${i};`).join("\n");
 
@@ -58,6 +60,34 @@ describe("buildPlan", () => {
     expect(db?.kind === "file" && db.depth).toBe("full");
     const utils = plan.sections.find((s) => s.id === "file:lib/utils.ts");
     expect(utils?.kind === "file" && utils.depth).toBe("brief");
+  });
+});
+
+describe("tour order and chapters", () => {
+  it("plays components in the order the app reaches them and assigns chapters", () => {
+    const ingest = ingestOf({
+      "package.json": '{ "dependencies": { "react": "19", "redux": "5" } }',
+      "src/main.jsx": `import { App } from "./App";\n${lines(10)}`,
+      "src/App.jsx": `import { Zeta } from "./components/Zeta";\nimport { Alpha } from "./components/Alpha";\n${lines(60)}`,
+      "src/components/Zeta.jsx": `import { Inner } from "./Inner";\n${lines(70)}`,
+      "src/components/Inner.jsx": lines(70),
+      "src/components/Alpha.jsx": lines(70),
+    });
+    const plan = buildPlan(ingest);
+    const order = plan.sections.map((s) => s.id);
+    expect(order.indexOf("file:src/components/Zeta.jsx")).toBeLessThan(order.indexOf("file:src/components/Inner.jsx"));
+    expect(order.indexOf("file:src/components/Inner.jsx")).toBeLessThan(order.indexOf("file:src/components/Alpha.jsx"));
+    expect(order.slice(0, 2)).toEqual(["file:src/main.jsx", "file:src/App.jsx"]);
+    expect(plan.sections[0].chapter).toBe("start");
+    expect(plan.sections.find((s) => s.id === "file:src/components/Alpha.jsx")?.chapter).toBe("interface");
+    expect(plan.sections.find((s) => s.id === "group:config")?.chapter).toBe("setup");
+    expect(coreTerms(collectDeps(ingest.files))).toEqual(["component", "props", "state", "hook", "store", "action", "reducer", "middleware"]);
+  });
+
+  it("puts over-capitalised titles into sentence case", () => {
+    expect(sentenceCase("The Article Editor Form")).toBe("The article editor form");
+    expect(sentenceCase("How the API route talks to OpenAI")).toBe("How the API route talks to OpenAI");
+    expect(sentenceCase("Where React Router fits")).toBe("Where React Router fits");
   });
 });
 

@@ -5,7 +5,7 @@
  * and configuration last.
  */
 import type { FileCategory, IngestResult, RepoFile } from "@/lib/ingest/types";
-import type { Chunk, Depth, GroupKind, GroupSection, NarrationLength, NarrationPlan, PlanSection } from "./types";
+import type { ChapterKey, Chunk, Depth, GroupKind, GroupSection, NarrationLength, NarrationPlan, PlanSection } from "./types";
 
 export type Budget = {
   /** Most files that get a full-length section. */
@@ -30,39 +30,40 @@ export const BUDGETS: Record<NarrationLength, Budget> = {
   short: {
     maxFull: 12,
     maxMajor: 4,
-    majorWords: [200, 330],
+    majorWords: [200, 320],
     maxSections: 30,
-    fullWords: [130, 230],
-    briefWords: [45, 90],
-    groupWords: [70, 140],
-    overviewWords: [350, 550],
-    closingWords: [180, 300],
+    fullWords: [120, 200],
+    briefWords: [40, 80],
+    groupWords: [60, 120],
+    overviewWords: [300, 450],
+    closingWords: [180, 280],
     chunkChars: 24_000,
     groupChars: 24_000,
   },
+  // Aims for roughly 45 to 75 minutes of listening on a mid-sized app.
   medium: {
     maxFull: 28,
     maxMajor: 6,
-    majorWords: [320, 560],
+    majorWords: [320, 480],
     maxSections: 56,
-    fullWords: [200, 380],
-    briefWords: [70, 140],
-    groupWords: [110, 240],
-    overviewWords: [550, 850],
-    closingWords: [280, 450],
+    fullWords: [200, 300],
+    briefWords: [60, 120],
+    groupWords: [130, 210],
+    overviewWords: [450, 700],
+    closingWords: [300, 450],
     chunkChars: 24_000,
     groupChars: 30_000,
   },
   long: {
     maxFull: 80,
     maxMajor: 12,
-    majorWords: [500, 800],
+    majorWords: [450, 700],
     maxSections: 140,
-    fullWords: [350, 650],
-    briefWords: [110, 200],
-    groupWords: [160, 320],
-    overviewWords: [800, 1200],
-    closingWords: [400, 650],
+    fullWords: [280, 480],
+    briefWords: [90, 170],
+    groupWords: [140, 280],
+    overviewWords: [700, 1000],
+    closingWords: [400, 600],
     chunkChars: 24_000,
     groupChars: 36_000,
   },
@@ -122,6 +123,15 @@ const MORE_TITLES: Partial<Record<FileCategory, string>> = {
   script: "More scripts",
 };
 
+/** Tiers are grouped into a handful of spoken chapters. */
+export function chapterOf(tier: number): ChapterKey {
+  if (tier < 2) return "start";
+  if (tier < 3) return "core";
+  if (tier < 4) return "interface";
+  if (tier < 8) return "support";
+  return "setup";
+}
+
 /** Files per group we show source for; the rest are listed by name. */
 const MAX_GROUP_FILES = 30;
 /** Largest "more of …" group before it's split by folder. */
@@ -151,16 +161,23 @@ function isUiKit(path: string) {
  * Orders files inside one tier so related files sit together: files are
  * clustered by folder, clusters play in order of their most important file.
  */
-function orderTier(files: RepoFile[], tier: FileCategory): RepoFile[] {
+function orderTier(files: RepoFile[], tier: FileCategory, reach: Map<string, number>): RepoFile[] {
+  if (tier === "component") {
+    // Screens in the order the app reaches them, so each feature's pieces play together.
+    const unreached = files.filter((f) => !reach.has(f.path));
+    const reached = files.filter((f) => reach.has(f.path)).sort((a, b) => reach.get(a.path)! - reach.get(b.path)!);
+    return [...reached, ...clusterOrder(unreached, (a, b) => b.importance - a.importance || a.path.localeCompare(b.path))];
+  }
   if (tier === "route") {
     // Screens before API endpoints, then by path so areas stay together.
     const isApi = (f: RepoFile) => /(^|\/)api\//.test(f.path) || /(^|\/)route\.[jt]s$/.test(f.path);
     return [...files].sort((a, b) => Number(isApi(a)) - Number(isApi(b)) || a.path.localeCompare(b.path));
   }
   if (tier === "entry") {
-    // Root layouts before pages; otherwise by importance.
+    // Root layouts before pages; otherwise in start-up order (what loads what).
     const rank = (f: RepoFile) => (/(^|\/)layout\.[jt]sx?$/.test(f.path) ? 0 : /(^|\/)page\.[jt]sx?$/.test(f.path) ? 1 : 2);
-    return clusterOrder(files, (a, b) => rank(a) - rank(b) || b.importance - a.importance);
+    const at = (f: RepoFile) => reach.get(f.path) ?? Number.MAX_SAFE_INTEGER;
+    return [...files].sort((a, b) => rank(a) - rank(b) || at(a) - at(b) || b.importance - a.importance);
   }
   if (tier === "core") {
     // Foundations (most depended-on) before the files that build on them;
@@ -318,10 +335,33 @@ export function buildPlan(ingest: IngestResult, length: NarrationLength = "mediu
   const major = new Set(fullList.filter((f) => f.lines >= 180).slice(0, budget.maxMajor).map((f) => f.path));
   const depthOf = (f: RepoFile): Depth => (major.has(f.path) ? "major" : full.has(f.path) ? "full" : "brief");
 
-  // Components the entry point mounts directly (the app shell, the router)
+  // Root entry points: the ones nothing else in the repo loads.
+  const roots = individuals.filter((f) => f.isEntry && f.importedBy.length === 0);
+  // Components a root entry mounts directly (the app shell, the router)
   // describe the app's screens, so they play with the routes.
-  const shell = new Set(individuals.filter((f) => f.isEntry).flatMap((f) => f.imports));
+  const shell = new Set(roots.flatMap((f) => f.imports));
   const tierOf = (f: RepoFile): FileCategory => (f.category === "component" && shell.has(f.path) ? "route" : f.category);
+
+  // Depth-first walk of the import graph from the entry points and routes, in
+  // source order: the order a person would meet each screen and its pieces.
+  const byPath = new Map(files.map((f) => [f.path, f]));
+  const reach = new Map<string, number>();
+  const visit = (path: string) => {
+    if (reach.has(path)) return;
+    const f = byPath.get(path);
+    if (!f) return;
+    reach.set(path, reach.size);
+    for (const next of f.imports) visit(next);
+  };
+  [...files]
+    .filter((f) => f.isEntry || f.category === "route")
+    .sort(
+      (a, b) =>
+        Number(b.isEntry && b.importedBy.length === 0) - Number(a.isEntry && a.importedBy.length === 0) ||
+        Number(b.isEntry) - Number(a.isEntry) ||
+        a.path.localeCompare(b.path),
+    )
+    .forEach((f) => visit(f.path));
 
   type Keyed = { section: PlanSection; tier: number; order: number };
   const keyed: Keyed[] = [];
@@ -329,7 +369,7 @@ export function buildPlan(ingest: IngestResult, length: NarrationLength = "mediu
   const byTier = new Map<FileCategory, RepoFile[]>();
   for (const f of individuals) byTier.set(tierOf(f), [...(byTier.get(tierOf(f)) ?? []), f]);
   for (const [tier, list] of byTier) {
-    const ordered = orderTier(list, tier);
+    const ordered = orderTier(list, tier, reach);
     // Several short files in one folder play better as one section than as a
     // string of tiny parts.
     const briefsByDir = new Map<string, RepoFile[]>();
@@ -349,6 +389,7 @@ export function buildPlan(ingest: IngestResult, length: NarrationLength = "mediu
           section: {
             id: `group:folder:${dir}`,
             kind: "group",
+            chapter: chapterOf(TIER[tier]),
             groupKind: "more",
             title: `Smaller pieces in ${dir ? `the ${dir.slice(dir.lastIndexOf("/") + 1)} folder` : "the project root"}`,
             description: `the smaller supporting files that sit together in the ${dir || "root"} folder`,
@@ -363,6 +404,7 @@ export function buildPlan(ingest: IngestResult, length: NarrationLength = "mediu
         section: {
           id: `file:${f.path}`,
           kind: "file",
+          chapter: chapterOf(TIER[tier]),
           path: f.path,
           depth: depthOf(f),
           category: f.category,
@@ -383,6 +425,7 @@ export function buildPlan(ingest: IngestResult, length: NarrationLength = "mediu
     const section: GroupSection = {
       id: `group:${kind}${idSuffix}`,
       kind: "group",
+      chapter: chapterOf(tier),
       groupKind: kind,
       title: title ?? meta.title,
       description: meta.description,

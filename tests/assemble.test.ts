@@ -20,9 +20,24 @@ describe("toListeningText", () => {
   it("reads as plain speech with spoken part numbers and no paths", () => {
     const text = toListeningText(w);
     expect(text).toBe(
-      "A guided tour of my cool App.\n\nThis app does a thing.\n\nPart one. Where it starts.\n\nFirst.\n\nSecond.\n\nPart two. How it's set up.\n\nConfig.\n\nFinally. Where to go when you want to change something.\n\nGo explore.\n",
+      "A guided tour of my cool App.\n\nThis app does a thing.\n\nPart one. Where it starts.\n\nFirst.\n\nSecond.\n\nPart two. How it's set up.\n\nConfig.\n\nLast stop. Where to go when you want to change something.\n\nGo explore.\n",
     );
     expect(text).not.toMatch(/[#*`/]/);
+  });
+
+  it("announces chapters, then each part by its title", () => {
+    const chaptered: Walkthrough = {
+      ...w,
+      sections: [
+        { ...w.sections[0], chapter: "start" },
+        { ...w.sections[1], chapter: "setup" },
+      ],
+    };
+    expect(toListeningText(chaptered)).toBe(
+      "A guided tour of my cool App.\n\nThis app does a thing.\n\nChapter one. Where it all starts.\n\nWhere it starts.\n\nFirst.\n\nSecond.\n\nChapter two. Setup, tests and docs.\n\nHow it's set up.\n\nConfig.\n\nLast stop. Where to go when you want to change something.\n\nGo explore.\n",
+    );
+    expect(toMarkdown(chaptered)).toContain("## Chapter 2: Setup, tests and docs");
+    expect(toMarkdown(chaptered)).toContain("### 2. How it's set up.");
   });
 });
 

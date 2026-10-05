@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { fileSlug, repoLabel, scriptStats, toListeningText, toMarkdown } from "@/lib/narrate/assemble";
+import { chaptersOf, fileSlug, numberWords, repoLabel, scriptStats, toListeningText, toMarkdown } from "@/lib/narrate/assemble";
 import type { Walkthrough } from "@/lib/narrate/types";
 import { cn } from "@/lib/utils";
 
@@ -104,17 +104,24 @@ export function ResultView({ walkthrough: w, onRetryMissing, className }: Props)
         ) : (
           <article className="mx-auto mt-8 max-w-[38rem]">
             <Part id="part-overview" eyebrow="Introduction" title="The big picture" body={w.overview} />
-            {w.sections.map((s, i) => (
-              <Part
-                key={s.id}
-                id={`part-${i + 1}`}
-                eyebrow={`Part ${i + 1}`}
-                title={s.title}
-                paths={s.paths}
-                body={s.body}
-              />
+            {chaptersOf(w).map((chapter, c) => (
+              <div key={c}>
+                {chapter.title && (
+                  <div className="mt-10 mb-2 flex items-center gap-4">
+                    <span className="h-px flex-1 bg-gradient-to-r from-transparent to-border" />
+                    <p className="text-center">
+                      <span className="label-caps block text-gold/75">Chapter {numberWords(c + 1)}</span>
+                      <span className="mt-1 block font-serif text-[1.375rem] text-soft-white/90 italic">{chapter.title}</span>
+                    </p>
+                    <span className="h-px flex-1 bg-gradient-to-l from-transparent to-border" />
+                  </div>
+                )}
+                {chapter.sections.map(({ section: s, number }) => (
+                  <Part key={s.id} id={`part-${number}`} eyebrow={`Part ${number}`} title={s.title} paths={s.paths} body={s.body} />
+                ))}
+              </div>
             ))}
-            {w.closing && <Part id="part-closing" eyebrow="Finally" title="Where to make changes" body={w.closing} />}
+            {w.closing && <Part id="part-closing" eyebrow="Last stop" title="Where to make changes" body={w.closing} />}
           </article>
         )}
       </div>

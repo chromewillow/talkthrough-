@@ -50,8 +50,11 @@ export function toSpeakable(input: string): string {
   t = t.replace(/\betc\.(?=\s*[A-Z]|\s*$)/g, "and so on.").replace(/\betc\./gi, "and so on");
   t = t.replace(/\bvs\.?(?=\s)/gi, "versus");
   t = t.replace(/\s~\s?(\d)/g, " about $1");
+  // Product and file names with dots: "Next.js" → "Next JS", "package.json" → "package JSON".
+  t = t.replace(/\b([A-Za-z][\w-]*)\.js\b/g, "$1 JS").replace(/\b([A-Za-z][\w-]*)\.json\b/g, "$1 JSON");
   // Lowercase acronyms get read as words ("id" as in Freud); capitals get spelled out.
   t = t.replace(/\b(id|url|api|json|html|css|ui|sql|jwt|http|https|cli|sdk|llm)(s?)\b/g, (_, a: string, plural: string) => a.toUpperCase() + plural);
+  t = polishPhrasing(t);
   // Emoji and decorative symbols.
   t = t.replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, "");
   // Stray markdown escapes.
@@ -68,6 +71,26 @@ export function toSpeakable(input: string): string {
   return t;
 }
 
+/**
+ * Removes the filler and screen-bound phrases the prompts ban but models
+ * still slip in now and then. Only unambiguous patterns are touched.
+ */
+export function polishPhrasing(input: string): string {
+  let t = input;
+  // "Notice that the list…" → "The list…"
+  t = t.replace(/\b(?:Notice|Note) (?:that|how) (\w)/g, (_, c: string) => c.toUpperCase());
+  t = t.replace(/,? (?:notice|note) (?:that|how) /g, " ");
+  t = t.replace(/\bAs you can see, (\w)/g, (_, c: string) => c.toUpperCase());
+  t = t.replace(/,? as you can see,?/gi, "");
+  // Filler adverbs.
+  t = t.replace(/\b(Simply|Basically),? (\w)/g, (_, _w: string, c: string) => c.toUpperCase());
+  t = t.replace(/ (?:simply|basically) /gi, " ");
+  // Positions in a file the listener can't see.
+  t = t.replace(/\bat the (?:very )?(?:bottom|end) of (?:the|this) file\b/gi, "toward the end of the file");
+  t = t.replace(/\b(?:at|near) the (?:very )?top of (?:the|this) file\b/gi, "early in the file");
+  return t;
+}
+
 /** Joins lines inside a paragraph so the result is one paragraph per block. */
 export function normaliseParagraphs(text: string): string {
   return text
@@ -77,10 +100,11 @@ export function normaliseParagraphs(text: string): string {
     .join("\n\n");
 }
 
-export type ParsedSection = { title: string | null; body: string; summary: string | null };
+export type ParsedSection = { title: string | null; body: string; summary: string | null; changes: string | null };
 
 const TITLE_RE = /^[ \t>*_#]*TITLE[ \t*_]*[:：][ \t*_]*(.+)$/im;
 const SUMMARY_RE = /^[ \t>*_#]*SUMMARY[ \t*_]*[:：][ \t*_]*([\s\S]+)$/im;
+const CHANGES_RE = /^[ \t>*_#]*CHANGES[ \t*_]*[:：][ \t*_]*([\s\S]+)$/im;
 
 /** Splits a "TITLE: … / narration / SUMMARY: …" reply into its parts. */
 export function parseSectionReply(raw: string): ParsedSection {
@@ -91,11 +115,25 @@ export function parseSectionReply(raw: string): ParsedSection {
 
   let title: string | null = null;
   let summary: string | null = null;
+  let changes: string | null = null;
 
   const s = text.match(SUMMARY_RE);
   if (s && s.index !== undefined) {
     summary = cleanInline(s[1]);
     text = text.slice(0, s.index).trim();
+  }
+  // CHANGES comes before SUMMARY in the format, but models sometimes swap them.
+  const c = text.match(CHANGES_RE);
+  if (c && c.index !== undefined) {
+    changes = cleanInline(c[1]);
+    text = text.slice(0, c.index).trim();
+  }
+  if (summary) {
+    const inSummary = summary.match(/\bCHANGES[ \t*_]*[:：][ \t*_]*(.+)$/i);
+    if (inSummary && inSummary.index !== undefined) {
+      changes ??= inSummary[1].trim();
+      summary = summary.slice(0, inSummary.index).trim();
+    }
   }
   const t = text.match(TITLE_RE);
   if (t && t.index !== undefined && t.index < 400) {
@@ -117,6 +155,7 @@ export function parseSectionReply(raw: string): ParsedSection {
     title: title ? title.slice(0, 120) : null,
     body,
     summary: summary || null,
+    changes: changes && !/^none\.?$/i.test(changes) ? changes : null,
   };
 }
 

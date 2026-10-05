@@ -35,6 +35,17 @@ export type GroupKind =
   | "migrations"
   | "more";
 
+/** The spoken chapters the tour is grouped into. */
+export type ChapterKey = "start" | "core" | "interface" | "support" | "setup";
+
+export const CHAPTER_TITLES: Record<ChapterKey, string> = {
+  start: "Where it all starts",
+  core: "The core logic",
+  interface: "What you see on screen",
+  support: "Helpers and supporting pieces",
+  setup: "Setup, tests and docs",
+};
+
 export type Chunk = {
   index: number;
   total: number;
@@ -46,6 +57,7 @@ export type Chunk = {
 export type FileSection = {
   id: string;
   kind: "file";
+  chapter: ChapterKey;
   path: string;
   depth: Depth;
   category: FileCategory;
@@ -55,6 +67,7 @@ export type FileSection = {
 export type GroupSection = {
   id: string;
   kind: "group";
+  chapter: ChapterKey;
   groupKind: GroupKind;
   /** Fallback heading if the model doesn't give one. */
   title: string;
@@ -77,6 +90,10 @@ export type SectionResult = {
   body: string;
   summary: string;
   paths: string[];
+  /** Which chapter of the tour this part belongs to. */
+  chapter?: ChapterKey;
+  /** The model's note on the most useful change here, for the closing guide. */
+  changes?: string;
 };
 
 export type Walkthrough = {

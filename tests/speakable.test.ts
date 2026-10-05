@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { firstSentences, parseSectionReply, toSpeakable } from "@/lib/narrate/speakable";
+import { firstSentences, parseSectionReply, polishPhrasing, toSpeakable } from "@/lib/narrate/speakable";
 
 describe("toSpeakable", () => {
   it("strips markdown a voice would read out", () => {
@@ -22,6 +22,17 @@ describe("toSpeakable", () => {
   it("capitalises acronyms so voices spell them out", () => {
     expect(toSpeakable("Pass the id and the urls to the api.")).toBe("Pass the ID and the URLs to the API.");
     expect(toSpeakable("A valid identifier, an idea, a uniform.")).toBe("A valid identifier, an idea, a uniform.");
+  });
+
+  it("says dotted product names the way people do", () => {
+    expect(toSpeakable("Built with Next.js, listed in package.json.")).toBe("Built with Next JS, listed in package JSON.");
+  });
+
+  it("drops banned filler and screen-bound phrasing", () => {
+    expect(polishPhrasing("Notice that the list resets. It simply waits, as you can see, at the bottom of the file.")).toBe(
+      "The list resets. It waits toward the end of the file.",
+    );
+    expect(polishPhrasing("The header at the top of the page stays.")).toBe("The header at the top of the page stays.");
   });
 
   it("removes emoji and collapses whitespace", () => {
@@ -49,6 +60,13 @@ describe("parseSectionReply", () => {
     const r = parseSectionReply("## The chat route\n\nIt handles messages.\n\nSUMMARY: Chat.");
     expect(r.title).toBe("The chat route");
     expect(r.body).toBe("It handles messages.");
+  });
+
+  it("pulls out the change notes, wherever the model puts them", () => {
+    const r = parseSectionReply("TITLE: X\n\nBody.\n\nCHANGES: Edit the limit in the agent file.\n\nSUMMARY: Does X.");
+    expect(r).toMatchObject({ body: "Body.", changes: "Edit the limit in the agent file.", summary: "Does X." });
+    const swapped = parseSectionReply("TITLE: X\n\nBody.\n\nSUMMARY: Does X.\nCHANGES: none");
+    expect(swapped).toMatchObject({ body: "Body.", summary: "Does X.", changes: null });
   });
 
   it("unwraps a fenced reply", () => {

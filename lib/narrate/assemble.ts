@@ -3,7 +3,7 @@
  * a listening script for a text-to-speech app, and a Markdown document for
  * reading and reference (with file paths, which the script leaves out).
  */
-import type { Walkthrough } from "./types";
+import { CHAPTER_TITLES, type SectionResult, type Walkthrough } from "./types";
 
 const ONES = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"];
 const TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
@@ -34,15 +34,40 @@ export function spokenName(name: string) {
     .trim();
 }
 
-/** Plain text written to be read aloud: no symbols, no paths, spoken part numbers. */
+export type Chapter = { title: string; sections: { section: SectionResult; number: number }[] };
+
+/**
+ * Groups parts into the tour's chapters. Walkthroughs saved before chapters
+ * existed come back as a single untitled chapter.
+ */
+export function chaptersOf(w: Walkthrough): Chapter[] {
+  const chapters: Chapter[] = [];
+  w.sections.forEach((section, i) => {
+    const title = section.chapter ? CHAPTER_TITLES[section.chapter] : "";
+    const last = chapters[chapters.length - 1];
+    if (last && last.title === title) last.sections.push({ section, number: i + 1 });
+    else chapters.push({ title, sections: [{ section, number: i + 1 }] });
+  });
+  return chapters;
+}
+
+const CLOSING_LINE = "Last stop. Where to go when you want to change something.";
+
+/** Plain text written to be read aloud: no symbols, no paths, spoken chapter headings. */
 export function toListeningText(w: Walkthrough): string {
   const parts: string[] = [sentence(`A guided tour of ${spokenName(w.repo.repo)}`), w.overview.trim()];
-  w.sections.forEach((s, i) => {
-    parts.push(`Part ${numberWords(i + 1)}. ${sentence(s.title)}`);
-    parts.push(s.body.trim());
+  const chapters = chaptersOf(w);
+  const titled = chapters.some((c) => c.title);
+  chapters.forEach((chapter, c) => {
+    if (titled && chapter.title) parts.push(`Chapter ${numberWords(c + 1)}. ${sentence(chapter.title)}`);
+    for (const { section, number } of chapter.sections) {
+      // With chapters, each part is announced by its title alone; without, by number.
+      parts.push(titled ? sentence(section.title) : `Part ${numberWords(number)}. ${sentence(section.title)}`);
+      parts.push(section.body.trim());
+    }
   });
   if (w.closing.trim()) {
-    parts.push("Finally. Where to go when you want to change something.");
+    parts.push(CLOSING_LINE);
     parts.push(w.closing.trim());
   }
   return `${parts.filter(Boolean).join("\n\n")}\n`;
@@ -60,10 +85,15 @@ export function toMarkdown(w: Walkthrough): string {
     "",
     w.overview.trim(),
   ];
-  w.sections.forEach((s, i) => {
-    lines.push("", `## ${i + 1}. ${s.title}`, "");
-    const paths = s.paths.length > 8 ? [...s.paths.slice(0, 8), `and ${s.paths.length - 8} more`] : s.paths;
-    lines.push(paths.map((p) => (p.startsWith("and ") ? p : `\`${p}\``)).join(" · "), "", s.body.trim());
+  const chapters = chaptersOf(w);
+  const titled = chapters.some((c) => c.title);
+  chapters.forEach((chapter, c) => {
+    if (titled && chapter.title) lines.push("", `## Chapter ${c + 1}: ${chapter.title}`);
+    for (const { section: s, number } of chapter.sections) {
+      lines.push("", `${titled ? "###" : "##"} ${number}. ${s.title}`, "");
+      const paths = s.paths.length > 8 ? [...s.paths.slice(0, 8), `and ${s.paths.length - 8} more`] : s.paths;
+      lines.push(paths.map((p) => (p.startsWith("and ") ? p : `\`${p}\``)).join(" · "), "", s.body.trim());
+    }
   });
   if (w.closing.trim()) lines.push("", "## Where to make changes", "", w.closing.trim());
   if (w.missing.length) {

@@ -167,6 +167,7 @@ async function explainFile(
 ): Promise<SectionResult> {
   const bodies: string[] = [];
   const summaries: string[] = [];
+  const changes: string[] = [];
   let title: string | null = null;
   let chunks = section.chunks;
 
@@ -192,14 +193,17 @@ async function explainFile(
     title ??= parsed.title;
     bodies.push(parsed.body);
     summaries.push(parsed.summary ?? firstSentences(parsed.body));
+    if (parsed.changes) changes.push(parsed.changes);
   }
 
   return {
     id: section.id,
-    title: title ?? fallbackTitle(section.path),
+    title: sentenceCase(title ?? fallbackTitle(section.path)),
     body: bodies.join("\n\n"),
     summary: summaries.length > 1 ? summaries.map((s) => firstSentences(s, 1)).join(" ") : summaries[0],
     paths: [section.path],
+    chapter: section.chapter,
+    changes: changes.join(" ") || undefined,
   };
 }
 
@@ -217,10 +221,12 @@ async function explainGroup(ctx: PromptContext, section: GroupSection, call: Cal
   if (!parsed.body) throw new LlmError("empty", "The model's answer had no narration in it.");
   return {
     id: section.id,
-    title: parsed.title ?? section.title,
+    title: sentenceCase(parsed.title ?? section.title),
     body: parsed.body,
     summary: parsed.summary ?? firstSentences(parsed.body),
     paths: sectionPaths(section),
+    chapter: section.chapter,
+    changes: parsed.changes ?? undefined,
   };
 }
 
@@ -237,6 +243,21 @@ function lastParagraph(text: string) {
   const paras = text.split(/\n{2,}/);
   const last = paras[paras.length - 1] ?? "";
   return last.length > 600 ? `…${last.slice(-600)}` : last;
+}
+
+/**
+ * "The Article Editor Form" → "The article editor form", leaving names that
+ * are clearly proper nouns or acronyms (React, API, the Editor component) alone
+ * when the title is already mostly lowercase.
+ */
+export function sentenceCase(title: string): string {
+  const words = title.trim().split(/\s+/);
+  // Title Case capitalises every longer word; a title with any lowercase
+  // longer word is already sentence case with proper nouns, so leave it.
+  const longer = words.slice(1).filter((w) => w.replace(/[^A-Za-z]/g, "").length > 3);
+  const titleCase = longer.length >= 2 && longer.every((w) => /^[A-Z]/.test(w));
+  if (!titleCase) return title.trim();
+  return [words[0], ...words.slice(1).map((w) => (/^[A-Z][a-z]+$/.test(w) ? w.toLowerCase() : w))].join(" ");
 }
 
 /** "app/(chat)/api/chat/route.ts" → "The route file in the chat folder". */

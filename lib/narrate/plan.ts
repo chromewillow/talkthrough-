@@ -10,6 +10,9 @@ import type { Chunk, Depth, GroupKind, GroupSection, NarrationLength, NarrationP
 export type Budget = {
   /** Most files that get a full-length section. */
   maxFull: number;
+  /** Of those, how many large central files get extra room. */
+  maxMajor: number;
+  majorWords: [number, number];
   /** Most sections overall (files plus groups). */
   maxSections: number;
   fullWords: [number, number];
@@ -26,6 +29,8 @@ export type Budget = {
 export const BUDGETS: Record<NarrationLength, Budget> = {
   short: {
     maxFull: 12,
+    maxMajor: 4,
+    majorWords: [200, 330],
     maxSections: 30,
     fullWords: [130, 230],
     briefWords: [45, 90],
@@ -37,6 +42,8 @@ export const BUDGETS: Record<NarrationLength, Budget> = {
   },
   medium: {
     maxFull: 28,
+    maxMajor: 6,
+    majorWords: [320, 560],
     maxSections: 56,
     fullWords: [200, 380],
     briefWords: [70, 140],
@@ -48,6 +55,8 @@ export const BUDGETS: Record<NarrationLength, Budget> = {
   },
   long: {
     maxFull: 80,
+    maxMajor: 12,
+    majorWords: [500, 800],
     maxSections: 140,
     fullWords: [350, 650],
     briefWords: [110, 200],
@@ -304,8 +313,10 @@ export function buildPlan(ingest: IngestResult, length: NarrationLength = "mediu
         (f.lines >= (f.category === "route" ? 30 : 50) && !["style", "script", "data"].includes(f.category) && !isMostlyMarkup(f)),
     )
     .sort((a, b) => b.importance - a.importance);
-  const full = new Set(fullCandidates.slice(0, budget.maxFull).map((f) => f.path));
-  const depthOf = (f: RepoFile): Depth => (full.has(f.path) ? "full" : "brief");
+  const fullList = fullCandidates.slice(0, budget.maxFull);
+  const full = new Set(fullList.map((f) => f.path));
+  const major = new Set(fullList.filter((f) => f.lines >= 180).slice(0, budget.maxMajor).map((f) => f.path));
+  const depthOf = (f: RepoFile): Depth => (major.has(f.path) ? "major" : full.has(f.path) ? "full" : "brief");
 
   // Components the entry point mounts directly (the app shell, the router)
   // describe the app's screens, so they play with the routes.
@@ -357,7 +368,7 @@ export function buildPlan(ingest: IngestResult, length: NarrationLength = "mediu
           category: f.category,
           // A brief mention only needs the opening of a long file.
           chunks:
-            depthOf(f) === "full"
+            depthOf(f) !== "brief"
               ? chunkContent(f.content, budget.chunkChars)
               : [{ ...chunkContent(f.content, budget.chunkChars)[0], total: 1 }],
         },

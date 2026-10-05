@@ -50,6 +50,8 @@ export function toSpeakable(input: string): string {
   t = t.replace(/\betc\.(?=\s*[A-Z]|\s*$)/g, "and so on.").replace(/\betc\./gi, "and so on");
   t = t.replace(/\bvs\.?(?=\s)/gi, "versus");
   t = t.replace(/\s~\s?(\d)/g, " about $1");
+  // Lowercase acronyms get read as words ("id" as in Freud); capitals get spelled out.
+  t = t.replace(/\b(id|url|api|json|html|css|ui|sql|jwt|http|https|cli|sdk|llm)(s?)\b/g, (_, a: string, plural: string) => a.toUpperCase() + plural);
   // Emoji and decorative symbols.
   t = t.replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, "");
   // Stray markdown escapes.

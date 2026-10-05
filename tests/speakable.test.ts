@@ -19,6 +19,11 @@ describe("toSpeakable", () => {
     expect(toSpeakable("React vs. Vue")).toBe("React versus Vue");
   });
 
+  it("capitalises acronyms so voices spell them out", () => {
+    expect(toSpeakable("Pass the id and the urls to the api.")).toBe("Pass the ID and the URLs to the API.");
+    expect(toSpeakable("A valid identifier, an idea, a uniform.")).toBe("A valid identifier, an idea, a uniform.");
+  });
+
   it("removes emoji and collapses whitespace", () => {
     expect(toSpeakable("Done ✅   really.\n\n\n\nNext.")).toBe("Done really.\n\nNext.");
   });

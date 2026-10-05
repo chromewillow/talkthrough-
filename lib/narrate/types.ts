@@ -21,8 +21,8 @@ export type NarrationOptions = {
 
 export const DEFAULT_OPTIONS: NarrationOptions = { length: "medium", concurrency: 4 };
 
-/** How much air time a file gets. */
-export type Depth = "full" | "brief";
+/** How much air time a file gets: the few biggest, most central files get the most. */
+export type Depth = "major" | "full" | "brief";
 
 export type GroupKind =
   | "config"

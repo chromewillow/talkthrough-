@@ -1,20 +1,22 @@
 "use client";
 
-import { ArrowRight, RotateCcw, Square } from "lucide-react";
+import { ArrowRight, ArrowUp, History, RotateCcw, Square } from "lucide-react";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { isResumable, toFriendly } from "@/lib/client/errors";
+import { loadLast, saveLast } from "@/lib/client/history";
 import { FriendlyError, ingest } from "@/lib/client/ingest";
-import { runKey, runReducer, type RunState } from "@/lib/client/run-state";
+import { runKey, runReducer } from "@/lib/client/run-state";
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type StoredSettings } from "@/lib/client/settings";
 import { newSession, normaliseBaseUrl, type Session } from "@/lib/narrate/llm";
 import { runWalkthrough } from "@/lib/narrate/pipeline";
 import { buildPlan } from "@/lib/narrate/plan";
-import { DEFAULT_OPTIONS, type SectionResult } from "@/lib/narrate/types";
+import { DEFAULT_OPTIONS, type SectionResult, type Walkthrough } from "@/lib/narrate/types";
 import { ProgressView } from "./progress-view";
+import { ResultView } from "./result-view";
 import { SettingsPanel } from "./settings-panel";
 
 export function TalkthroughApp() {
@@ -26,13 +28,18 @@ export function TalkthroughApp() {
   const abortRef = useRef<AbortController | null>(null);
   const sessionRef = useRef<{ key: string; session: Session } | null>(null);
   const [formError, setFormError] = useState<FriendlyError | null>(null);
+  const [last, setLast] = useState<Walkthrough | null>(null);
+  const [shownLast, setShownLast] = useState<Walkthrough | null>(null);
+  const urlRef = useRef<HTMLInputElement>(null);
 
-  // Settings live in localStorage, which only exists in the browser.
+  // Settings and the last walkthrough live in localStorage, which only exists in the browser.
   useEffect(() => {
     const stored = loadSettings();
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- hydrate from storage once on mount
+    /* eslint-disable react-hooks/set-state-in-effect -- hydrate from storage once on mount */
     setSettings(stored);
     if (!stored.apiKey) setSettingsOpen(true);
+    setLast(loadLast());
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
   const updateSettings = useCallback((next: StoredSettings) => {
@@ -62,6 +69,7 @@ export function TalkthroughApp() {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
+    setShownLast(null);
     if (!resume) dispatch({ type: "reset" });
     dispatch({ type: "start", url: target });
 
@@ -85,26 +93,16 @@ export function TalkthroughApp() {
         done,
         signal: controller.signal,
         session: sessionRef.current.session,
-        includeOverview: false,
         onEvent: (event) => dispatch({ type: "event", event }),
       });
 
       if (controller.signal.aborted) return;
       if (outcome.status === "failed") dispatch({ type: "failed", error: toFriendly(outcome.error) });
-      else if (outcome.status === "sections") {
-        dispatch({
-          type: "done",
-          walkthrough: {
-            repo: result.repo,
-            model: settings.model,
-            createdAt: new Date().toISOString(),
-            title: `A guided tour of ${result.repo.repo}`,
-            overview: "",
-            closing: "",
-            sections: outcome.sections,
-            missing: [],
-          },
-        });
+      else if (outcome.status === "complete") {
+        dispatch({ type: "done", walkthrough: outcome.walkthrough });
+        saveLast(outcome.walkthrough);
+        setLast(outcome.walkthrough);
+        requestAnimationFrame(() => document.getElementById("result")?.scrollIntoView({ behavior: "smooth", block: "start" }));
       }
     } catch (err) {
       if (controller.signal.aborted) return;
@@ -117,8 +115,18 @@ export function TalkthroughApp() {
     dispatch({ type: "stopped" });
   }
 
+  function startOver() {
+    abortRef.current?.abort();
+    dispatch({ type: "reset" });
+    setShownLast(null);
+    setUrl("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    setTimeout(() => urlRef.current?.focus(), 400);
+  }
+
   const canResume =
     !!run && (run.phase === "stopped" || (run.phase === "failed" && isResumable(run.error?.code))) && !!run.plan;
+  const finished = run?.phase === "done" ? run.walkthrough : shownLast;
 
   return (
     <main className="mx-auto flex w-full max-w-[44rem] flex-col px-4 pt-8 pb-28 sm:px-8 sm:pt-14">
@@ -147,6 +155,7 @@ export function TalkthroughApp() {
         <div>
           <Label htmlFor="repo-url">Repository</Label>
           <Input
+            ref={urlRef}
             id="repo-url"
             name="url"
             inputMode="url"
@@ -185,7 +194,20 @@ export function TalkthroughApp() {
         </div>
       </form>
 
-      {run && <ProgressView run={run} className="mt-6" />}
+      {!run && !shownLast && last && (
+        <button
+          type="button"
+          onClick={() => setShownLast(last)}
+          className="group mt-5 flex cursor-pointer items-center gap-3 self-start rounded-full px-1 text-left text-[0.8125rem] text-faint transition-colors hover:text-soft-white"
+        >
+          <History className="size-4 text-periwinkle/70" />
+          <span>
+            Open your last walkthrough · <span className="text-muted-foreground group-hover:text-soft-white">{last.repo.owner}/{last.repo.repo}</span>
+          </span>
+        </button>
+      )}
+
+      {run && run.phase !== "done" && <ProgressView run={run} className="mt-6" />}
 
       {run?.phase === "failed" && run.error && (
         <div role="alert" className="panel mt-6 p-5 sm:p-6">
@@ -201,7 +223,21 @@ export function TalkthroughApp() {
         </div>
       )}
 
-      {run && <SectionsPreview run={run} />}
+      {finished && (
+        <div id="result" className="scroll-mt-4">
+          <ResultView
+            walkthrough={finished}
+            onRetryMissing={run?.phase === "done" && finished.missing.length ? () => void generate(true) : undefined}
+            className="mt-6"
+          />
+          <div className="mt-8 flex justify-center">
+            <Button variant="ghost" onClick={startOver}>
+              <ArrowUp className="size-4" />
+              Start another walkthrough
+            </Button>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
@@ -212,33 +248,5 @@ function ResumeButton({ onClick }: { onClick: () => void }) {
       <RotateCcw className="size-4" />
       Resume
     </Button>
-  );
-}
-
-/** The explanations written so far, in listening order. */
-function SectionsPreview({ run }: { run: RunState }) {
-  if (!run.plan) return null;
-  const sections = run.plan.sections.map((s) => run.results[s.id]).filter(Boolean);
-  if (!sections.length) return null;
-  return (
-    <section className="panel mt-6 p-5 sm:p-8">
-      <p className="label-caps">The tour so far</p>
-      <div className="mt-6 space-y-10">
-        {sections.map((s, i) => (
-          <article key={s.id}>
-            <h3 className="font-serif text-2xl text-soft-white">
-              <span className="mr-3 font-mono text-xs text-faint">{String(i + 1).padStart(2, "0")}</span>
-              {s.title}
-            </h3>
-            <p className="mt-1 font-mono text-[0.6875rem] text-faint">{s.paths.length > 3 ? `${s.paths.slice(0, 3).join(", ")} +${s.paths.length - 3}` : s.paths.join(", ")}</p>
-            {s.body.split("\n\n").map((p, n) => (
-              <p key={n} className="mt-3 font-reading text-[1.0625rem] leading-[1.7] text-soft-white/85">
-                {p}
-              </p>
-            ))}
-          </article>
-        ))}
-      </div>
-    </section>
   );
 }

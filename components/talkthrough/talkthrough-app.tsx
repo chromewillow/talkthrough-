@@ -19,6 +19,23 @@ import { ProgressView } from "./progress-view";
 import { ResultView } from "./result-view";
 import { SettingsPanel } from "./settings-panel";
 
+const EXAMPLES = ["vercel/ai-chatbot", "coderamp-labs/gitingest"];
+
+const STEPS = [
+  {
+    title: "Paste a repository",
+    body: "Any public GitHub link. Dependencies, build output, lockfiles and assets are skipped automatically.",
+  },
+  {
+    title: "Every file, explained",
+    body: "Your model walks through each file in plain English: what it does, why it's there, and where you'd change it.",
+  },
+  {
+    title: "Press play",
+    body: "Copy the script into ElevenLabs and listen while you walk, cook or commute.",
+  },
+];
+
 export function TalkthroughApp() {
   const [url, setUrl] = useState("");
   const [settings, setSettings] = useState<StoredSettings>(DEFAULT_SETTINGS);
@@ -53,7 +70,11 @@ export function TalkthroughApp() {
   async function generate(resume = false) {
     setFormError(null);
     const target = resume && run ? run.url : url;
-    if (!target.trim()) return;
+    if (!target.trim()) {
+      setFormError(new FriendlyError("Paste a repository first", "Any public GitHub link works, like github.com/vercel/ai-chatbot."));
+      urlRef.current?.focus();
+      return;
+    }
     if (!settings.apiKey.trim() || !settings.model.trim() || !normaliseBaseUrl(settings.baseUrl)) {
       setNeedsKey(true);
       setSettingsOpen(true);
@@ -167,8 +188,24 @@ export function TalkthroughApp() {
             onChange={(e) => setUrl(e.target.value)}
             className="mt-3 h-12 rounded-full px-5 text-base"
             disabled={busy}
-            required
           />
+          {!busy && !url && (
+            <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 pl-1 text-[0.75rem] text-faint">
+              <span>Try</span>
+              {EXAMPLES.map((ex, i) => (
+                <span key={ex} className="flex items-center gap-2">
+                  {i > 0 && <span aria-hidden>·</span>}
+                  <button
+                    type="button"
+                    onClick={() => setUrl(`github.com/${ex}`)}
+                    className="cursor-pointer font-mono text-[0.6875rem] text-periwinkle/80 underline-offset-4 transition-colors hover:text-soft-white hover:underline"
+                  >
+                    {ex}
+                  </button>
+                </span>
+              ))}
+            </p>
+          )}
         </div>
 
         <SettingsPanel value={settings} onChange={updateSettings} open={settingsOpen} onOpenChange={setSettingsOpen} needsKey={needsKey} />
@@ -186,7 +223,7 @@ export function TalkthroughApp() {
               Stop
             </Button>
           ) : (
-            <Button type="submit" size="lg" disabled={!url.trim()} className="w-full sm:w-auto">
+            <Button type="submit" size="lg" className="w-full sm:w-auto">
               <ArrowRight />
               Generate walkthrough
             </Button>
@@ -210,8 +247,9 @@ export function TalkthroughApp() {
       {run && run.phase !== "done" && <ProgressView run={run} className="mt-6" />}
 
       {run?.phase === "failed" && run.error && (
-        <div role="alert" className="panel mt-6 p-5 sm:p-6">
-          <p className="font-serif text-xl text-soft-white">{run.error.title}</p>
+        <div role="alert" className="panel mt-6 border-l-2 border-l-destructive/50 p-5 sm:p-6">
+          <p className="label-caps text-destructive/80">Couldn&apos;t finish</p>
+          <p className="mt-2 font-serif text-2xl text-soft-white">{run.error.title}</p>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{run.error.message}</p>
           {canResume && <ResumeButton onClick={() => void generate(true)} />}
         </div>
@@ -221,6 +259,18 @@ export function TalkthroughApp() {
           <p className="text-sm text-muted-foreground">Stopped. Finished parts are kept if you resume.</p>
           <ResumeButton onClick={() => void generate(true)} />
         </div>
+      )}
+
+      {!run && !finished && (
+        <ol className="mt-16 grid gap-8 border-t border-border pt-10 sm:grid-cols-3 sm:gap-6">
+          {STEPS.map((step, i) => (
+            <li key={step.title}>
+              <span className="font-mono text-[0.6875rem] text-gold/70">0{i + 1}</span>
+              <p className="mt-2 font-serif text-[1.375rem] leading-tight text-soft-white">{step.title}</p>
+              <p className="mt-2 text-[0.875rem] leading-relaxed text-muted-foreground">{step.body}</p>
+            </li>
+          ))}
+        </ol>
       )}
 
       {finished && (
@@ -238,6 +288,21 @@ export function TalkthroughApp() {
           </div>
         </div>
       )}
+
+      <footer className="mt-24 flex flex-col gap-2 border-t border-border pt-6 text-[0.75rem] text-faint sm:flex-row sm:items-center sm:justify-between">
+        <span>
+          <span className="font-serif text-[0.9375rem] text-muted-foreground">Talkthrough</span> · bring your own model · your key stays in
+          your browser
+        </span>
+        <a
+          href="https://github.com/chromewillow/talkthrough-"
+          target="_blank"
+          rel="noreferrer"
+          className="underline-offset-4 transition-colors hover:text-soft-white hover:underline"
+        >
+          Source on GitHub
+        </a>
+      </footer>
     </main>
   );
 }

@@ -1,82 +1,127 @@
 /**
- * The page's atmosphere: two out-of-focus blooms — petals of cobalt,
- * periwinkle, lavender and powder blue dissolved into haze — over near-black,
- * finished with film grain and a soft vignette. Purely decorative.
+ * The page's atmosphere, built like a macro photograph with a very shallow
+ * depth of field: a far bloom dissolved into haze, nearer petals that are
+ * soft but still read as petals, a few points of bokeh, then film grain and
+ * a vignette. Everything stays faint so the content keeps the stage.
+ * Purely decorative and hidden from assistive tech.
  */
 
 const GRAIN =
   "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")";
 
-type Petal = { angle: number; length: number; width: number; fill: string };
+type Tint = "cobalt" | "periwinkle" | "lavender" | "powder" | "soft-white";
+type Petal = { angle: number; length: number; width: number; tint: Tint; lift?: number };
 
-function Bloom({ id, petals, heart, className }: { id: string; petals: Petal[]; heart: string; className: string }) {
-  const tints = ["cobalt", "periwinkle", "lavender", "powder"] as const;
+const TINTS: Tint[] = ["cobalt", "periwinkle", "lavender", "powder", "soft-white"];
+
+function Bloom({ id, petals, heart, className }: { id: string; petals: Petal[]; heart: Tint; className?: string }) {
   return (
-    <svg viewBox="-220 -220 440 440" className={className} aria-hidden>
+    <svg viewBox="-240 -240 480 480" className={className} aria-hidden>
       <defs>
-        {tints.map((t) => (
-          <radialGradient key={t} id={`${id}-${t}`} cx="50%" cy="78%" r="75%">
+        {TINTS.map((t) => (
+          // Light pools toward each petal's tip, like backlit macro shots.
+          <radialGradient key={t} id={`${id}-${t}`} cx="50%" cy="22%" r="80%">
             <stop offset="0%" stopColor={`var(--${t})`} stopOpacity="0.95" />
-            <stop offset="55%" stopColor={`var(--${t})`} stopOpacity="0.45" />
+            <stop offset="45%" stopColor={`var(--${t})`} stopOpacity="0.55" />
             <stop offset="100%" stopColor={`var(--${t})`} stopOpacity="0" />
           </radialGradient>
         ))}
         <radialGradient id={`${id}-heart`}>
-          <stop offset="0%" stopColor={heart} stopOpacity="0.9" />
-          <stop offset="100%" stopColor={heart} stopOpacity="0" />
+          <stop offset="0%" stopColor={`var(--${heart})`} stopOpacity="0.85" />
+          <stop offset="100%" stopColor={`var(--${heart})`} stopOpacity="0" />
         </radialGradient>
       </defs>
       {petals.map((p, i) => (
         <ellipse
           key={i}
           cx="0"
-          cy={-p.length / 2 - 12}
+          cy={-(p.lift ?? 14) - p.length / 2}
           rx={p.width}
           ry={p.length / 2}
           transform={`rotate(${p.angle})`}
-          fill={`url(#${id}-${p.fill})`}
+          fill={`url(#${id}-${p.tint})`}
         />
       ))}
-      <circle r="46" fill={`url(#${id}-heart)`} />
+      <circle r="38" fill={`url(#${id}-heart)`} />
     </svg>
   );
 }
 
-const MAIN_PETALS: Petal[] = [
-  { angle: 0, length: 210, width: 62, fill: "periwinkle" },
-  { angle: 47, length: 190, width: 58, fill: "cobalt" },
-  { angle: 98, length: 220, width: 66, fill: "lavender" },
-  { angle: 151, length: 180, width: 54, fill: "cobalt" },
-  { angle: 203, length: 205, width: 60, fill: "powder" },
-  { angle: 255, length: 185, width: 56, fill: "periwinkle" },
-  { angle: 308, length: 200, width: 62, fill: "cobalt" },
+// A loose, slightly irregular corolla — real flowers aren't symmetrical.
+const FAR: Petal[] = [
+  { angle: -8, length: 230, width: 70, tint: "periwinkle" },
+  { angle: 44, length: 205, width: 64, tint: "cobalt" },
+  { angle: 97, length: 240, width: 72, tint: "lavender" },
+  { angle: 152, length: 195, width: 60, tint: "cobalt" },
+  { angle: 206, length: 225, width: 66, tint: "powder" },
+  { angle: 258, length: 200, width: 62, tint: "periwinkle" },
+  { angle: 309, length: 215, width: 66, tint: "cobalt" },
 ];
 
-const SMALL_PETALS: Petal[] = [
-  { angle: 12, length: 170, width: 50, fill: "lavender" },
-  { angle: 84, length: 150, width: 46, fill: "powder" },
-  { angle: 156, length: 175, width: 52, fill: "periwinkle" },
-  { angle: 228, length: 150, width: 46, fill: "lavender" },
-  { angle: 300, length: 165, width: 50, fill: "cobalt" },
+const NEAR: Petal[] = [
+  { angle: 18, length: 190, width: 46, tint: "lavender", lift: 20 },
+  { angle: 78, length: 170, width: 40, tint: "powder", lift: 24 },
+  { angle: 141, length: 200, width: 48, tint: "periwinkle", lift: 18 },
+  { angle: 214, length: 165, width: 40, tint: "lavender", lift: 26 },
+  { angle: 283, length: 185, width: 44, tint: "soft-white", lift: 22 },
+];
+
+const LOW: Petal[] = [
+  { angle: 30, length: 180, width: 56, tint: "lavender" },
+  { angle: 110, length: 160, width: 50, tint: "cobalt" },
+  { angle: 190, length: 185, width: 56, tint: "periwinkle" },
+  { angle: 270, length: 160, width: 48, tint: "lavender" },
+];
+
+/** Out-of-focus points of light, positioned in viewport-relative units. */
+const BOKEH = [
+  { top: "9%", right: "31%", size: "2.4vmax", tint: "powder", opacity: 0.14 },
+  { top: "24%", right: "8%", size: "1.4vmax", tint: "soft-white", opacity: 0.12 },
+  { top: "5%", right: "7%", size: "4vmax", tint: "periwinkle", opacity: 0.09 },
 ];
 
 export function Backdrop() {
   return (
     <div aria-hidden className="pointer-events-none fixed inset-0 -z-10 overflow-hidden bg-background">
-      {/* Deep washes so the blooms sit in coloured air, not on flat black. */}
-      <div className="absolute inset-0 bg-[radial-gradient(110%_75%_at_78%_-8%,rgb(24_38_120/0.55)_0%,transparent_58%),radial-gradient(80%_60%_at_-5%_105%,rgb(46_30_102/0.45)_0%,transparent_62%)]" />
+      {/* Coloured air, so the blooms don't sit on flat black. */}
+      <div className="absolute inset-0 bg-[radial-gradient(95%_70%_at_82%_-6%,rgb(22_34_110/0.5)_0%,transparent_60%),radial-gradient(70%_55%_at_-8%_108%,rgb(42_28_96/0.38)_0%,transparent_64%)]" />
 
-      <div className="absolute -top-[22vmax] -right-[26vmax] size-[92vmax] opacity-[0.5] blur-[56px] will-change-transform motion-safe:animate-drift sm:-right-[18vmax] sm:opacity-[0.55]">
-        <Bloom id="bloom-a" petals={MAIN_PETALS} heart="var(--powder)" className="size-full" />
+      {/* Far bloom: dissolved almost completely. */}
+      <div className="absolute -top-[24vmax] -right-[30vmax] size-[96vmax] opacity-[0.34] blur-[72px] will-change-transform motion-safe:animate-drift sm:-right-[22vmax]">
+        <Bloom id="far" petals={FAR} heart="powder" className="size-full" />
       </div>
-      <div className="absolute -bottom-[26vmax] -left-[24vmax] size-[70vmax] opacity-[0.32] blur-[64px] will-change-transform motion-safe:animate-drift-slow">
-        <Bloom id="bloom-b" petals={SMALL_PETALS} heart="var(--lavender)" className="size-full" />
-      </div>
-      {/* A faint warm pollen glow — the only gold in the atmosphere. */}
-      <div className="absolute top-[14vmax] right-[16vmax] size-[16vmax] rounded-full bg-[radial-gradient(circle,rgb(231_200_127/0.10)_0%,transparent_70%)] blur-2xl" />
 
-      <div className="absolute inset-0 opacity-[0.11] mix-blend-overlay" style={{ backgroundImage: GRAIN }} />
-      <div className="absolute inset-0 bg-[radial-gradient(125%_95%_at_50%_35%,transparent_45%,rgb(3_4_8/0.78)_100%)]" />
+      {/* Nearer petals: soft, but their shapes still read. */}
+      <div className="absolute -top-[12vmax] -right-[20vmax] size-[62vmax] rotate-[24deg] opacity-[0.26] blur-[16px] will-change-transform motion-safe:animate-drift-slow sm:-right-[10vmax]">
+        <Bloom id="near" petals={NEAR} heart="lavender" className="size-full" />
+      </div>
+
+      {/* A second flower low on the left, deep in the haze. */}
+      <div className="absolute -bottom-[30vmax] -left-[26vmax] size-[72vmax] opacity-[0.2] blur-[64px] will-change-transform motion-safe:animate-drift-slow">
+        <Bloom id="low" petals={LOW} heart="lavender" className="size-full" />
+      </div>
+
+      {BOKEH.map((b, i) => (
+        <span
+          key={i}
+          className="absolute rounded-full blur-[6px]"
+          style={{
+            top: b.top,
+            right: b.right,
+            width: b.size,
+            height: b.size,
+            opacity: b.opacity,
+            // Real bokeh has a slightly brighter rim than its centre.
+            background: `radial-gradient(circle, color-mix(in oklab, var(--${b.tint}) 70%, transparent) 0%, var(--${b.tint}) 52%, transparent 68%)`,
+          }}
+        />
+      ))}
+
+      {/* The only warmth in the atmosphere: a faint pollen glow at the heart. */}
+      <div className="absolute top-[12vmax] right-[14vmax] size-[14vmax] rounded-full bg-[radial-gradient(circle,rgb(231_200_127/0.09)_0%,transparent_70%)] blur-2xl" />
+
+      <div className="absolute inset-0 opacity-[0.12] mix-blend-overlay" style={{ backgroundImage: GRAIN }} />
+      <div className="absolute inset-0 bg-[radial-gradient(120%_90%_at_60%_30%,transparent_40%,rgb(3_4_8/0.82)_100%)]" />
     </div>
   );
 }

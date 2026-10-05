@@ -43,16 +43,16 @@ export function ResultView({ walkthrough: w, onRetryMissing, className }: Props)
       </header>
 
       <div className="sticky top-0 z-10 mt-5 border-y border-border bg-[rgb(9_11_20/0.82)] px-5 py-3 backdrop-blur-xl sm:px-8">
-        <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={copy} className="min-w-[9.5rem] flex-1 sm:flex-none" aria-live="polite">
+        <div className="flex items-center gap-2">
+          <Button onClick={copy} className="flex-1 sm:flex-none sm:px-7" aria-live="polite">
             {copied ? <Check /> : <Copy />}
             {copied ? "Copied" : "Copy script"}
           </Button>
-          <Button variant="outline" onClick={() => download(`${fileSlug(w)}.txt`, script, "text/plain")}>
+          <Button variant="outline" className="px-4" onClick={() => download(`${fileSlug(w)}.txt`, script, "text/plain")} aria-label="Download as a text file">
             <Download />
             .txt
           </Button>
-          <Button variant="outline" onClick={() => download(`${fileSlug(w)}.md`, markdown, "text/markdown")}>
+          <Button variant="outline" className="px-4" onClick={() => download(`${fileSlug(w)}.md`, markdown, "text/markdown")} aria-label="Download as Markdown">
             <Download />
             .md
           </Button>

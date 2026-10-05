@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Sample app the end-to-end tests narrate.
+    "e2e/fixtures/**",
   ]),
 ]);
 

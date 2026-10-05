@@ -27,11 +27,21 @@ const mono = JetBrains_Mono({
   subsets: ["latin"],
 });
 
+// Absolute base for social images: the production domain on Vercel, else localhost.
+const siteUrl =
+  process.env.NEXT_PUBLIC_SITE_URL ??
+  (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "http://localhost:3000");
+
+const description =
+  "Paste a GitHub repository and get a calm, plain-English walkthrough of the code, written to be listened to.";
+
 export const metadata: Metadata = {
-  title: "Talkthrough — hear what your code does",
-  description:
-    "Paste a GitHub repository and get a calm, plain-English walkthrough of the code, written to be listened to.",
+  metadataBase: new URL(siteUrl),
+  title: "Talkthrough — hear what your code is actually doing",
+  description,
   applicationName: "Talkthrough",
+  openGraph: { title: "Talkthrough", description, type: "website" },
+  twitter: { card: "summary_large_image", title: "Talkthrough", description },
 };
 
 export const viewport: Viewport = {

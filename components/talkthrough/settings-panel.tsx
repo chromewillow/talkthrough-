@@ -65,14 +65,22 @@ export function SettingsPanel({ value, onChange, open, onOpenChange, needsKey }:
                 {p.name}
               </button>
             ))}
-            <span
+            <button
+              type="button"
+              onClick={() => {
+                if (!preset) return;
+                set({ baseUrl: "", model: "" });
+                requestAnimationFrame(() => document.getElementById(ids.base)?.focus());
+              }}
               className={cn(
-                "rounded-full border px-3.5 py-1.5 text-[0.8125rem]",
-                preset ? "border-transparent text-faint" : "border-gold/50 bg-gold/10 text-gold",
+                "cursor-pointer rounded-full border px-3.5 py-1.5 text-[0.8125rem] transition-colors duration-300",
+                preset
+                  ? "border-border text-muted-foreground hover:border-periwinkle/35 hover:text-soft-white"
+                  : "border-gold/50 bg-gold/10 text-gold",
               )}
             >
               Custom
-            </span>
+            </button>
           </div>
 
           <Field label="Base URL" htmlFor={ids.base} hint="Any OpenAI-compatible endpoint.">
@@ -80,7 +88,7 @@ export function SettingsPanel({ value, onChange, open, onOpenChange, needsKey }:
               id={ids.base}
               value={value.baseUrl}
               onChange={(e) => set({ baseUrl: e.target.value })}
-              placeholder="https://openrouter.ai/api/v1"
+              placeholder="https://your-provider.com/v1"
               inputMode="url"
               autoComplete="off"
               spellCheck={false}

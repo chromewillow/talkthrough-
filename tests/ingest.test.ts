@@ -23,8 +23,23 @@ const FILES: Record<string, string | Buffer> = {
 
 let server: Server;
 
+// Thousands of folders, each with its own rule-heavy .gitignore: matching must stay cheap.
+const IGNORES: Record<string, string> = {};
+for (let i = 0; i < 1500; i++) {
+  IGNORES[`pkg${i}/.gitignore`] = Array.from({ length: 40 }, (_, j) => `generated-${j}/**/*.tmp`).join("\n");
+  IGNORES[`pkg${i}/index.ts`] = `export const n${i} = ${i};`;
+}
+
 beforeAll(async () => {
   server = createServer((req, res) => {
+    if (req.url?.startsWith("/me/ignores/tar.gz/")) {
+      res.writeHead(200, { "Content-Type": "application/x-gzip" });
+      const p = tarPack();
+      for (const [name, body] of Object.entries(IGNORES)) p.entry({ name: `ignores-abc/${name}` }, body);
+      p.finalize();
+      p.pipe(createGzip()).pipe(res);
+      return;
+    }
     if (!req.url?.startsWith("/me/demo/tar.gz/")) {
       res.writeHead(404).end();
       return;
@@ -73,6 +88,13 @@ describe("ingestRepo", () => {
     expect(r.repo.subpath).toBe("packages/web");
     expect(r.files.map((f) => f.path)).toEqual(["app.ts"]);
   });
+
+  it("caps ignore rules so a repo full of .gitignore files stays quick", async () => {
+    const t = performance.now();
+    const r = await ingestRepo("me/ignores");
+    expect(performance.now() - t).toBeLessThan(8000);
+    expect(r.files.length).toBeGreaterThan(1000);
+  }, 20000);
 
   it("reports missing repositories in plain language", async () => {
     await expect(ingestRepo("github.com/me/nope")).rejects.toMatchObject({ code: "not_found" });

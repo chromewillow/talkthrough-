@@ -205,7 +205,9 @@ async function explainFile(
         i--;
         continue;
       }
-      // Keep what earlier parts of this file already said rather than losing it all.
+      // A stop or a run-ending error isn't this file's fault: don't save half of it as finished.
+      if ((err instanceof LlmError && (isFatal(err) || err.kind === "aborted")) || (err instanceof Error && err.name === "AbortError")) throw err;
+      // Otherwise keep what earlier parts of this file already said rather than losing it all.
       if (bodies.length) break;
       throw err;
     }

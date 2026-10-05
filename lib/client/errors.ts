@@ -16,7 +16,7 @@ const TITLES: Record<LlmErrorKind, string> = {
 
 const ADVICE: Partial<Record<LlmErrorKind, string>> = {
   rate_limit:
-    "We waited and retried a few times. Give it a minute, then press Resume — finished parts are kept. Lowering parallel requests in Settings helps too.",
+    "We waited and retried a few times. Give it a minute, then press Resume — finished parts are kept. Lowering parallel requests under Model & key helps too.",
   server: "Finished parts are kept, so pressing Resume picks up where this stopped.",
   network: "Finished parts are kept, so pressing Resume picks up where this stopped.",
   empty: "Some models (especially reasoning-heavy ones) do this. Try Resume, or pick a different model.",
@@ -34,7 +34,7 @@ export function toFriendly(err: unknown): FriendlyError {
 }
 
 /**
- * Finished parts are kept for the same repository and model, so any model
+ * Finished parts are kept for the same repository, even if the model changes, so any model
  * failure can be resumed once its cause is fixed (a new key, more credit, a
  * model name typo). Repository errors happen before anything is written.
  */
@@ -44,6 +44,6 @@ export function isResumable(code: string | undefined) {
 
 /** Short advice for the resume button, by failure. */
 export function resumeHint(code: string | undefined): string | null {
-  if (code === "auth" || code === "credits" || code === "model") return "Fix it under Model & key, then resume. Finished parts are kept.";
+  if (code === "auth" || code === "credits" || code === "model") return "Once that's fixed, resume. Finished parts are kept, even if you switch models.";
   return null;
 }

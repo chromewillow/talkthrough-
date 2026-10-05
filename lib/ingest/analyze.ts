@@ -329,17 +329,17 @@ function isEntryByPath(path: string, hints: ProjectHints, allPaths: Set<string>)
 
 // Every repetition is bounded, so a crafted file can't make these scans quadratic.
 const JS_IMPORT_RE =
-  /(?:^|[^\w$.])(?:import|export)\s+(?:type\s+)?[^'"`;]{0,400}?\sfrom\s*['"]([^'"\n]{1,300})['"]|(?:^|[^\w$.])import\s*['"]([^'"\n]{1,300})['"]|(?:^|[^\w$.])require\(\s*['"]([^'"\n]{1,300})['"]\s*\)|(?:^|[^\w$.])import\(\s*['"]([^'"\n]{1,300})['"]\s*\)/g;
-const CSS_IMPORT_RE = /@(?:import|use|forward)\s+(?:url\()?\s*['"]([^'"]+)['"]/g;
+  /(?:^|[^\w$.])(?:import|export)\s[^'"`;]{0,400}?\sfrom\s*['"]([^'"\n]{1,300})['"]|(?:^|[^\w$.])import\s*['"]([^'"\n]{1,300})['"]|(?:^|[^\w$.])require\(\s*['"]([^'"\n]{1,300})['"]\s*\)|(?:^|[^\w$.])import\(\s*['"]([^'"\n]{1,300})['"]\s*\)/g;
+const CSS_IMPORT_RE = /@(?:import|use|forward)\s+(?:url\(\s*)?['"]([^'"\n]{1,300})['"]/g;
 const PY_IMPORT_RE = /^[ \t]*import[ \t]+([\w.]+(?:[ \t]*,[ \t]*[\w.]+)*)/gm;
-const PY_FROM_RE = /^[ \t]*from[ \t]+(\.*[\w.]*)[ \t]+import[ \t]+(\([^)]*\)|[^\n#]+)/gm;
-const GO_IMPORT_BLOCK_RE = /import\s*\(([^)]{0,8000})\)/g;
+const PY_FROM_RE = /^[ \t]*from[ \t]+([\w.]+)[ \t]+import[ \t]+(\([^()]{0,4000}\)|[^\n#]+)/gm;
+const GO_IMPORT_BLOCK_RE = /import\s*\(([^()]{0,8000})\)/g;
 const GO_IMPORT_LINE_RE = /import\s+(?:[\w.]+\s+)?"([^"]+)"/g;
-const RUBY_REQUIRE_RE = /require(_relative)?\s*\(?\s*['"]([^'"]+)['"]/g;
+const RUBY_REQUIRE_RE = /require(_relative)?\s*(?:\(\s*)?['"]([^'"\n]{1,300})['"]/g;
 const RUST_MOD_RE = /^\s*(?:pub(?:\([\w:]+\))?\s+)?mod\s+(\w+)\s*;/gm;
 const RUST_USE_RE = /^\s*(?:pub\s+)?use\s+crate::([\w:]+)/gm;
 const C_INCLUDE_RE = /^\s*#\s*include\s+"([^"]+)"/gm;
-const PHP_INCLUDE_RE = /(?:require|include)(?:_once)?\s*\(?\s*(?:__DIR__\s*\.\s*)?['"]([^'"]+\.php)['"]/g;
+const PHP_INCLUDE_RE = /(?:require|include)(?:_once)?\s*(?:\(\s*)?(?:__DIR__\s*\.\s*)?['"]([^'"\n]{1,300}\.php)['"]/g;
 const PHP_USE_RE = /^\s*use\s+([\w\\]+)\s*;/gm;
 const JVM_IMPORT_RE = /^\s*import\s+(?:static\s+)?([\w.]+)\s*;?/gm;
 const DART_IMPORT_RE = /^\s*(?:import|export|part)\s+['"]([^'"]+)['"]/gm;
@@ -464,7 +464,7 @@ function extractImports(file: RawFile, r: Resolver): string[] {
     }
     if (ext === "html") {
       // Vite-style apps: <script type="module" src="/src/main.tsx">, rooted at the HTML file's folder.
-      for (const m of text.matchAll(/<(?:script|link)[^>]{1,500}?(?:src|href)=["']([^"':]{1,300})["']/g)) {
+      for (const m of text.matchAll(/<(?:script|link)\b[^<>]{1,500}?(?:src|href)=["']([^"':]{1,300})["']/g)) {
         const joined = join(dirOf(file.path), m[1].replace(/^\//, ""));
         if (joined !== null) add(resolveJsLike(joined, r));
       }
@@ -804,21 +804,41 @@ function importanceOf(f: Omit<RepoFile, "importance" | "content">): number {
 
 // ─── Public entry ───────────────────────────────────────────────────────────
 
+const IMPORT_BUDGET_MS = 5000;
+
 export function analyzeFiles(raw: RawFile[]): RepoFile[] {
   const { resolver, hints, packageJsons } = buildResolver(raw);
   const declared = declaredEntries(raw, resolver, packageJsons);
 
+  // Import scanning is the one step whose cost depends on what's inside files;
+  // past a time budget the rest go without import links rather than stall the server.
+  const started = Date.now();
   const importsByPath = new Map<string, string[]>();
-  for (const f of raw) importsByPath.set(f.path, extractImports(f, resolver));
+  for (const f of raw) importsByPath.set(f.path, Date.now() - started < IMPORT_BUDGET_MS ? extractImports(f, resolver) : []);
   const importedBy = new Map<string, string[]>();
   for (const [from, list] of importsByPath) {
-    for (const to of list) importedBy.set(to, [...(importedBy.get(to) ?? []), from]);
+    for (const to of list) {
+      const users = importedBy.get(to);
+      if (users) users.push(from);
+      else importedBy.set(to, [from]);
+    }
+  }
+
+  // A "script" the app itself imports (an agent's tools folder, say) is app code,
+  // and so is anything such a file imports in turn.
+  const categories = new Map(raw.map((f) => [f.path, categorize(f.path, hints)] as const));
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const [path, category] of categories) {
+      if (category === "script" && (importedBy.get(path) ?? []).some((p) => categories.get(p) !== "script")) {
+        categories.set(path, "core");
+        changed = true;
+      }
+    }
   }
 
   const files: RepoFile[] = raw.map((f) => {
-    let category = categorize(f.path, hints);
-    // A "script" the app itself imports (an agent's tools folder, say) is app code.
-    if (category === "script" && (importedBy.get(f.path) ?? []).some((p) => categorize(p, hints) !== "script")) category = "core";
+    let category = categories.get(f.path)!;
     const isEntry =
       category !== "test" &&
       category !== "config" &&

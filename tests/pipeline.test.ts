@@ -173,6 +173,41 @@ describe("runWalkthrough", () => {
   });
 });
 
+describe("stopping mid-file", () => {
+  it("doesn't save half a long file as finished when the run ends on its second part", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_u: string, init: RequestInit) => {
+        const user = JSON.parse(init.body as string).messages[1].content as string;
+        if (user.includes("You're writing part 2 of")) {
+          return new Response(JSON.stringify({ error: { message: "Insufficient credits" } }), { status: 402 });
+        }
+        return reply(init);
+      }),
+    );
+    const ingest = demo();
+    const a = ingest.files.find((f) => f.path === "src/a.ts")!;
+    a.content = body(1400);
+    a.lines = 1400;
+    const plan = buildPlan(ingest);
+    const events: PipelineEvent[] = [];
+    const outcome = await runWalkthrough({
+      ingest,
+      plan,
+      settings,
+      options: { length: "medium", concurrency: 1 },
+      signal: new AbortController().signal,
+      onEvent: (e) => events.push(e),
+      session: newSession(),
+    });
+    expect(outcome.status).toBe("failed");
+    if (outcome.status !== "failed") return;
+    expect(outcome.error.kind).toBe("credits");
+    expect(outcome.failed).toContain("file:src/a.ts");
+    expect(events.some((e) => e.type === "section-done" && e.result.id === "file:src/a.ts")).toBe(false);
+  });
+});
+
 describe("helpers", () => {
   it("trims a cut-off reply back to its last full sentence", () => {
     expect(endAtSentence("One whole sentence. Another full one. And then the")).toBe("One whole sentence. Another full one.");

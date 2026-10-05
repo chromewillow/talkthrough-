@@ -75,7 +75,7 @@ const TreeRow = memo(function TreeRow({ node, depth, open, toggle, status }: Row
               !expandable && "opacity-0",
             )}
           />
-          <span className={cn("truncate", node.skipped || node.included === 0 ? "text-faint/80" : "text-soft-white/85")}>
+          <span className={cn("truncate", node.skipped || node.included === 0 ? "text-faint" : "text-soft-white/85")}>
             {node.name}/
           </span>
           <span className="ml-auto shrink-0 pl-3 font-mono text-[0.6875rem] text-faint tabular-nums">
@@ -105,7 +105,7 @@ const TreeRow = memo(function TreeRow({ node, depth, open, toggle, status }: Row
       <span
         className={cn(
           "truncate transition-colors duration-500",
-          node.skipped ? "text-faint/70" : s === "active" ? "text-gold" : s === "done" ? "text-soft-white" : "text-soft-white/75",
+          node.skipped ? "text-faint" : s === "active" ? "text-gold" : s === "done" ? "text-soft-white" : "text-soft-white/75",
         )}
         title={node.path}
       >
@@ -119,7 +119,7 @@ const TreeRow = memo(function TreeRow({ node, depth, open, toggle, status }: Row
 });
 
 function SkipTag({ reason }: { reason: string }) {
-  return <span className="text-[0.625rem] tracking-[0.16em] text-faint/80 uppercase">{reason}</span>;
+  return <span className="text-[0.625rem] tracking-[0.16em] text-faint uppercase">{reason}</span>;
 }
 
 function StatusDot({ skipped, status }: { skipped: boolean; status?: FileStatus }) {

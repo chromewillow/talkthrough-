@@ -33,7 +33,7 @@ export function ResultView({ walkthrough: w, onRetryMissing, className }: Props)
     <section aria-labelledby="result-title" className={cn("panel overflow-clip", className)}>
       <header className="px-5 pt-6 sm:px-8 sm:pt-8">
         <p className="label-caps text-gold/80">Your walkthrough</p>
-        <h2 id="result-title" className="mt-3 text-balance font-display text-[1.875rem] leading-[1.12] font-medium tracking-[-0.02em] text-soft-white sm:text-[2.25rem]">
+        <h2 id="result-title" tabIndex={-1} className="mt-3 text-balance outline-none font-display text-[1.875rem] leading-[1.12] font-medium tracking-[-0.02em] text-soft-white sm:text-[2.25rem]">
           {w.title}
         </h2>
         <p className="mt-3 font-mono text-[0.6875rem] leading-relaxed text-faint">
@@ -56,12 +56,12 @@ export function ResultView({ walkthrough: w, onRetryMissing, className }: Props)
             <Download />
             .md
           </Button>
-          <div role="tablist" aria-label="View" className="ml-auto hidden rounded-full border border-border p-1 sm:flex">
+          <div role="group" aria-label="View" className="ml-auto hidden rounded-full border border-border p-1 sm:flex">
             {(["read", "script"] as const).map((v) => (
               <button
                 key={v}
-                role="tab"
-                aria-selected={view === v}
+                type="button"
+                aria-pressed={view === v}
                 onClick={() => setView(v)}
                 className={cn(
                   "cursor-pointer rounded-full px-3 py-1 text-[0.75rem] transition-colors duration-300",
@@ -97,7 +97,8 @@ export function ResultView({ walkthrough: w, onRetryMissing, className }: Props)
           </div>
         )}
 
-        <Contents w={w} />
+        {/* The plain script has no headings to jump to. */}
+        {view === "read" && <Contents w={w} />}
 
         {view === "script" ? (
           <pre className="mt-8 font-reading text-[1.0625rem] leading-[1.75] font-[450] whitespace-pre-wrap text-soft-white/88">{script}</pre>
@@ -105,7 +106,8 @@ export function ResultView({ walkthrough: w, onRetryMissing, className }: Props)
           <article className="mx-auto mt-8 max-w-[38rem]">
             <Part id="part-overview" eyebrow="Introduction" title="The big picture" body={w.overview} />
             {chaptersOf(w).map((chapter, c) => (
-              <div key={c}>
+              // The first part under a chapter heading doesn't need its own rule as well.
+              <div key={c} className="[&>div+section]:border-t-0 [&>div+section]:pt-6">
                 {chapter.title && (
                   <div className="mt-10 mb-2 flex items-center gap-4">
                     <span className="h-px flex-1 bg-gradient-to-r from-transparent to-border" />

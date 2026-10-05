@@ -18,12 +18,16 @@ type Props = {
   onOpenChange: (open: boolean) => void;
   /** Highlights the key field when a run needs it. */
   needsKey?: boolean;
+  /** False until stored settings have loaded; the summary stays blank instead of showing defaults. */
+  ready?: boolean;
+  /** Animate opening and closing. Off for the automatic first open, so the page doesn't spring. */
+  animate?: boolean;
 };
 
 const SPEEDS = [1, 2, 4, 6];
 
-export function SettingsPanel({ value, onChange, open, onOpenChange, needsKey }: Props) {
-  const ids = { base: useId(), key: useId(), model: useId(), models: useId(), remember: useId() };
+export function SettingsPanel({ value, onChange, open, onOpenChange, needsKey, ready = true, animate = true }: Props) {
+  const ids = { base: useId(), key: useId(), model: useId(), models: useId(), remember: useId(), provider: useId() };
   const [showKey, setShowKey] = useState(false);
   const models = useModelList(open ? value.baseUrl : "");
   const host = safeHost(normaliseBaseUrl(value.baseUrl) || "—");
@@ -35,25 +39,33 @@ export function SettingsPanel({ value, onChange, open, onOpenChange, needsKey }:
       <CollapsibleTrigger
         className={cn(
           "group flex w-full cursor-pointer items-center gap-3 rounded-2xl border border-border bg-white/[0.015] px-4 py-3 text-left transition-colors duration-300 hover:border-periwinkle/30",
-          needsKey && !value.apiKey && "border-gold/40",
+          ready && needsKey && !value.apiKey && "border-gold/40",
         )}
       >
         <KeyRound className="size-4 shrink-0 text-periwinkle" />
         <span className="label-caps shrink-0 text-soft-white/80">Model &amp; key</span>
-        <span className="min-w-0 flex-1 truncate text-right font-mono text-[0.6875rem] text-faint">
-          {host} · {value.model || "no model"} · {value.apiKey ? `key ${maskKey(value.apiKey)}` : <span className="text-gold">add a key</span>}
+        {/* Key status first, so narrow screens never truncate "add a key" away. */}
+        <span className={cn("min-w-0 flex-1 truncate text-right font-mono text-[0.6875rem] text-faint", !ready && "invisible")}>
+          {value.apiKey ? `key ${maskKey(value.apiKey)}` : <span className="text-gold">add a key</span>}
+          <span> · {value.model || "no model"}</span>
+          <span className="hidden md:inline"> · {host}</span>
         </span>
         <ChevronDown className="size-4 shrink-0 text-faint transition-transform duration-300 group-data-[state=open]:rotate-180" />
       </CollapsibleTrigger>
 
-      <CollapsibleContent className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
+      <CollapsibleContent
+        className={cn("overflow-hidden", animate && "data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down")}
+      >
         <div className="space-y-6 px-1 pt-6 pb-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="label-caps mr-1">Provider</span>
+          <div role="group" aria-labelledby={ids.provider} className="flex flex-wrap items-center gap-2">
+            <span id={ids.provider} className="label-caps mr-1">
+              Provider
+            </span>
             {PRESETS.map((p) => (
               <button
                 key={p.name}
                 type="button"
+                aria-pressed={preset?.name === p.name}
                 onClick={() => set({ baseUrl: p.baseUrl, model: p.model })}
                 className={cn(
                   "cursor-pointer rounded-full border px-3.5 py-1.5 text-[0.8125rem] transition-colors duration-300",
@@ -67,6 +79,7 @@ export function SettingsPanel({ value, onChange, open, onOpenChange, needsKey }:
             ))}
             <button
               type="button"
+              aria-pressed={!preset}
               onClick={() => {
                 if (!preset) return;
                 set({ baseUrl: "", model: "" });
@@ -153,14 +166,14 @@ export function SettingsPanel({ value, onChange, open, onOpenChange, needsKey }:
             </datalist>
           </Field>
 
-          <div className="grid gap-6 sm:grid-cols-2">
-            <div className="flex items-center justify-between gap-4 rounded-2xl border border-border px-4 py-3">
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+            <div className="flex items-center justify-between gap-2 rounded-2xl border border-border px-4 py-3 sm:gap-4">
               <Label htmlFor={ids.remember} className="cursor-pointer tracking-[0.18em]">
                 Remember on this device
               </Label>
               <Switch id={ids.remember} checked={value.remember} onCheckedChange={(remember) => set({ remember })} />
             </div>
-            <div className="flex items-center justify-between gap-4 rounded-2xl border border-border px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-border px-4 py-3 sm:gap-4">
               <span className="label-caps tracking-[0.18em]">Parallel requests</span>
               <div role="radiogroup" aria-label="Parallel requests" className="flex gap-1">
                 {SPEEDS.map((n) => (

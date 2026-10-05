@@ -44,7 +44,8 @@
   --ring: rgb(143 156 255 / 0.45);
   --radius: 1.25rem;
 
-  --faint: #6e7698;
+  /* Light enough for 4.5:1 on the lit glass panels, still below muted-foreground. */
+  --faint: #868eb2;
 }
 
 @theme inline {
@@ -87,8 +88,6 @@
   --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
 
   --animate-breathe: breathe 3.2s ease-in-out infinite;
-  --animate-drift: drift 90s ease-in-out infinite alternate;
-  --animate-drift-slow: drift-slow 140s ease-in-out infinite alternate;
 }
 
 @keyframes breathe {
@@ -100,24 +99,6 @@
   50% {
     opacity: 1;
     transform: scale(1);
-  }
-}
-
-@keyframes drift {
-  from {
-    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
-  }
-  to {
-    transform: translate3d(-4%, 3%, 0) rotate(14deg) scale(1.06);
-  }
-}
-
-@keyframes drift-slow {
-  from {
-    transform: translate3d(0, 0, 0) rotate(0deg);
-  }
-  to {
-    transform: translate3d(5%, -4%, 0) rotate(-10deg);
   }
 }
 
@@ -173,8 +154,9 @@
     background: linear-gradient(180deg, rgb(20 23 40 / 0.62), rgb(10 12 22 / 0.5));
     border: 1px solid var(--border);
     border-radius: var(--radius-xl);
-    backdrop-filter: blur(18px) saturate(115%);
+    /* Prefixed first: the CSS optimiser keeps the unprefixed one only when it comes last. */
     -webkit-backdrop-filter: blur(18px) saturate(115%);
+    backdrop-filter: blur(18px) saturate(115%);
     box-shadow:
       inset 0 1px 0 rgb(255 255 255 / 0.04),
       0 30px 80px -40px rgb(10 16 60 / 0.6);

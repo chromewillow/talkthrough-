@@ -22,8 +22,10 @@ const MAX_ENTRIES = 200_000;
 /** Decompressed bytes we'll inflate, so a tiny archive can't expand forever. */
 const MAX_INFLATED_BYTES = 1_500_000_000;
 /** Ignore-rule files we'll read, and their total size. */
-const MAX_IGNORE_FILES = 400;
+const MAX_IGNORE_FILES = 200;
 const MAX_IGNORE_BYTES = 2_000_000;
+/** Ignore rules across all files: matching cost grows with them, and real repos use a few hundred. */
+const MAX_IGNORE_RULES = 3_000;
 /** Whole-ingest deadline, inside the route's time limit. */
 const DEADLINE_MS = 50_000;
 
@@ -57,13 +59,15 @@ type WalkResult = {
 export async function ingestRepo(input: string, opts: { token?: string; signal?: AbortSignal } = {}): Promise<IngestResult> {
   const target = parseRepoUrl(input);
   const signal = opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(DEADLINE_MS)]) : AbortSignal.timeout(DEADLINE_MS);
+  // Timers can't interrupt synchronous work, so the filtering step checks the clock itself.
+  const deadline = Date.now() + DEADLINE_MS;
   try {
     const { stream, ref, subpath } = await openArchive(target, { token: opts.token, signal });
     const walk = await walkArchive(stream, subpath, signal);
-    return finish(target, ref, subpath, walk);
+    return finish(target, ref, subpath, walk, deadline);
   } catch (err) {
     if (signal.aborted && !opts.signal?.aborted && !(err instanceof IngestError && err.code !== "github_unreachable")) {
-      throw new IngestError("too_large", "That repository took too long to read. Try pointing at a subfolder, like github.com/owner/repo/tree/main/src.");
+      throw new IngestError("too_large", TOO_SLOW);
     }
     throw err;
   }
@@ -127,6 +131,7 @@ async function walkArchive(body: ReadableStream<Uint8Array>, subpath: string, si
   let keptBytes = 0;
   let ignoreFiles = 0;
   let ignoreBytes = 0;
+  let ignoreRules = 0;
   const gitignores = new GitignoreSet();
   const linguist = new LinguistHints();
   const prefix = subpath ? `${subpath.replace(/\/+$/, "")}/` : "";
@@ -183,8 +188,10 @@ async function walkArchive(body: ReadableStream<Uint8Array>, subpath: string, si
         if (size < 200_000 && ignoreFiles < MAX_IGNORE_FILES && ignoreBytes + size <= MAX_IGNORE_BYTES) {
           ignoreFiles++;
           ignoreBytes += size;
-          const text = decodeText(await readEntry(entry));
-          if (text !== null) {
+          const decoded = decodeText(await readEntry(entry));
+          const text = decoded === null ? null : withinRuleBudget(decoded, MAX_IGNORE_RULES - ignoreRules);
+          if (text) {
+            ignoreRules += countRules(text);
             if (base === ".gitignore") gitignores.add(full, text);
             else linguist.add(full, text);
           }
@@ -278,7 +285,26 @@ async function readEntry(entry: AsyncIterable<unknown>, limit = Infinity): Promi
   return Buffer.concat(chunks).subarray(0, Math.min(total, limit));
 }
 
-function finish(target: RepoTarget, ref: string, subpath: string, walk: WalkResult): IngestResult {
+const isRule = (line: string) => line.trim() !== "" && !line.trimStart().startsWith("#");
+
+function countRules(text: string) {
+  return text.split("\n").filter(isRule).length;
+}
+
+/** The file's text, cut off once the remaining rule budget is used up. */
+function withinRuleBudget(text: string, remaining: number): string | null {
+  if (remaining <= 0) return null;
+  const lines = text.split("\n");
+  let rules = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (isRule(lines[i]) && ++rules > remaining) return lines.slice(0, i).join("\n");
+  }
+  return text;
+}
+
+const TOO_SLOW = "That repository took too long to read. Try pointing at a subfolder, like github.com/owner/repo/tree/main/src.";
+
+function finish(target: RepoTarget, ref: string, subpath: string, walk: WalkResult, deadline = Infinity): IngestResult {
   const { gitignores, linguist } = walk;
   const prefix = subpath ? `${subpath.replace(/\/+$/, "")}/` : "";
   const rel = (full: string) => full.slice(prefix.length);
@@ -290,7 +316,8 @@ function finish(target: RepoTarget, ref: string, subpath: string, walk: WalkResu
   };
 
   const kept: Candidate[] = [];
-  for (const c of walk.candidates) {
+  for (const [i, c] of walk.candidates.entries()) {
+    if (i % 50 === 0 && Date.now() > deadline) throw new IngestError("too_large", TOO_SLOW);
     if (gitignores.ignores(c.path)) skip({ path: rel(c.path), reason: "gitignored" });
     else if (linguist.isGenerated(c.path)) skip({ path: rel(c.path), reason: "generated" });
     else kept.push(c);

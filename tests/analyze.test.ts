@@ -59,6 +59,36 @@ describe("analyzeFiles", () => {
   });
 });
 
+describe("crafted files", () => {
+  const timed = (files: ReturnType<typeof file>[]) => {
+    const t = performance.now();
+    analyzeFiles(files);
+    return performance.now() - t;
+  };
+
+  it("scans pathological import text in bounded time", () => {
+    expect(timed([file("a.js", " import x".repeat(17_000))])).toBeLessThan(1000);
+    // Long whitespace after "import" made the old pattern try every split of it.
+    expect(timed([file("b.js", (" import" + " ".repeat(390)).repeat(400))])).toBeLessThan(150);
+    expect(timed([file("a.html", "<link ".repeat(27_000))])).toBeLessThan(1000);
+    expect(timed([file("a.go", "import (".repeat(20_000))])).toBeLessThan(1000);
+    expect(timed([file("a.py", "from x import (\n".repeat(10_000))])).toBeLessThan(1000);
+    expect(timed([file("a.css", "@import  ".repeat(17_000))])).toBeLessThan(1000);
+  });
+
+  it("treats tools the app imports, and what they import, as app code", () => {
+    const files = analyzeFiles([
+      file("src/agent.ts", 'import { tools } from "../tools";'),
+      file("tools/index.ts", 'export { weather } from "./weather";'),
+      file("tools/weather.ts", "export const weather = () => 1;"),
+      file("tools/release.ts", "console.log('release');"),
+    ]);
+    expect(files.find((f) => f.path === "tools/index.ts")!.category).toBe("core");
+    expect(files.find((f) => f.path === "tools/weather.ts")!.category).toBe("core");
+    expect(files.find((f) => f.path === "tools/release.ts")!.category).toBe("script");
+  });
+});
+
 describe("helpers", () => {
   it("parses JSON with comments and trailing commas", () => {
     expect(parseJsonc('{ // hi\n "a": "http://x", /* c */ "b": [1,], }')).toEqual({ a: "http://x", b: [1] });

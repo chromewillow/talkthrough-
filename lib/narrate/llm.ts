@@ -231,7 +231,7 @@ async function chatAttempt(
         if (relayErr instanceof LlmError && relayErr.kind === "network") {
           throw new LlmError(
             "network",
-            `We couldn't reach ${safeHost(baseUrl)}. Check the base URL in Settings and your internet connection.`,
+            `We couldn't reach ${safeHost(baseUrl)}. Check the base URL under Model & key, and your internet connection.`,
           );
         }
         // The provider answered through the relay (even with an error), so the relay works.
@@ -364,21 +364,21 @@ function classify(status: number, message: string, settings: LlmSettings, baseUr
   if (status === 401 || /invalid api key|incorrect api key|no auth|unauthori[sz]ed|invalid_api_key/.test(m)) {
     return new LlmError(
       "auth",
-      `${host} rejected the API key. Open Settings and check it, and make sure it belongs to the same provider as the base URL.${detail}`,
+      `${host} rejected the API key. Check the key under Model & key, and make sure it belongs to the same provider as the base URL.${detail}`,
       status,
     );
   }
   if (status === 402 || /insufficient (credit|quota|funds|balance)|quota exceeded|billing|credits/.test(m)) {
     return new LlmError(
       "credits",
-      `Your ${host} account doesn't have enough credit for this. Top it up, or choose a cheaper model in Settings.${detail}`,
+      `Your ${host} account doesn't have enough credit for this. Top it up, or choose a cheaper model under Model & key.${detail}`,
       status,
     );
   }
   if (status === 404 || /model.*(not found|does not exist|not available|invalid)|no endpoints found|unknown model/.test(m)) {
     return new LlmError(
       "model",
-      `${host} doesn't recognise the model "${settings.model}", or the base URL is wrong. Check the exact model name in Settings${isOpenRouter(baseUrl) ? " — on OpenRouter it looks like anthropic/claude-sonnet-5.5" : ""}.${detail}`,
+      `${host} doesn't recognise the model "${settings.model}", or the base URL is wrong. Check the exact model name under Model & key${isOpenRouter(baseUrl) ? " — on OpenRouter it looks like anthropic/claude-sonnet-5.5" : ""}.${detail}`,
       status,
     );
   }

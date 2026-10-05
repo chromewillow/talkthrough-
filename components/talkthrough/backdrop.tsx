@@ -87,17 +87,17 @@ export function Backdrop() {
       <div className="absolute inset-0 bg-[radial-gradient(95%_70%_at_82%_-6%,rgb(22_34_110/0.5)_0%,transparent_60%),radial-gradient(70%_55%_at_-8%_108%,rgb(42_28_96/0.38)_0%,transparent_64%)]" />
 
       {/* Far bloom: dissolved almost completely. */}
-      <div className="absolute -top-[24vmax] -right-[30vmax] size-[96vmax] opacity-[0.34] blur-[72px] will-change-transform motion-safe:animate-drift sm:-right-[22vmax]">
+      <div className="absolute -top-[24vmax] -right-[30vmax] size-[96vmax] opacity-[0.34] blur-[72px] sm:-right-[22vmax]">
         <Bloom id="far" petals={FAR} heart="powder" className="size-full" />
       </div>
 
       {/* Nearer petals: soft, but their shapes still read. */}
-      <div className="absolute -top-[12vmax] -right-[20vmax] size-[62vmax] rotate-[24deg] opacity-[0.26] blur-[16px] will-change-transform motion-safe:animate-drift-slow sm:-right-[10vmax]">
+      <div className="absolute -top-[12vmax] -right-[20vmax] size-[62vmax] rotate-[24deg] opacity-[0.26] blur-[16px] sm:-right-[10vmax]">
         <Bloom id="near" petals={NEAR} heart="lavender" className="size-full" />
       </div>
 
       {/* A second flower low on the left, deep in the haze. */}
-      <div className="absolute -bottom-[30vmax] -left-[26vmax] size-[72vmax] opacity-[0.2] blur-[64px] will-change-transform motion-safe:animate-drift-slow">
+      <div className="absolute -bottom-[30vmax] -left-[26vmax] size-[72vmax] opacity-[0.2] blur-[64px]">
         <Bloom id="low" petals={LOW} heart="lavender" className="size-full" />
       </div>
 
@@ -120,7 +120,8 @@ export function Backdrop() {
       {/* The only warmth in the atmosphere: a faint pollen glow at the heart. */}
       <div className="absolute top-[12vmax] right-[14vmax] size-[14vmax] rounded-full bg-[radial-gradient(circle,rgb(231_200_127/0.09)_0%,transparent_70%)] blur-2xl" />
 
-      <div className="absolute inset-0 opacity-[0.12] mix-blend-overlay" style={{ backgroundImage: GRAIN }} />
+      {/* Soft light lifts the noise in the shadows, where overlay would multiply it away. */}
+      <div className="absolute inset-0 opacity-50 mix-blend-soft-light" style={{ backgroundImage: GRAIN }} />
       <div className="absolute inset-0 bg-[radial-gradient(120%_90%_at_60%_30%,transparent_40%,rgb(3_4_8/0.82)_100%)]" />
     </div>
   );

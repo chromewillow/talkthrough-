@@ -48,8 +48,28 @@ export function ProgressView({ run, className }: { run: RunState; className?: st
     return a?.total ? `${base} · part ${a.part} of ${a.total}` : base;
   };
 
+  // Screen readers hear a short status at meaningful moments, not every snippet and counter.
+  const stepSize = Math.max(1, Math.ceil(total / 5));
+  const coarseDone = done === total ? done : Math.floor(done / stepSize) * stepSize;
+  const srStatus =
+    run.phase === "reading"
+      ? "Reading the repository."
+      : run.phase === "explaining"
+        ? `Explaining files: ${coarseDone} of ${total} done${failedCount ? `, ${failedCount} couldn't be explained` : ""}.`
+        : run.phase === "overview"
+          ? "Writing the overview and the guide to changes."
+          : run.phase === "stopped"
+            ? "Stopped."
+            : "";
+
   return (
-    <section aria-live="polite" className={cn("panel p-5 sm:p-7", className)}>
+    <section aria-labelledby="progress-title" className={cn("panel p-5 sm:p-7", className)}>
+      <h2 id="progress-title" tabIndex={-1} className="sr-only">
+        Progress
+      </h2>
+      <p role="status" className="sr-only">
+        {srStatus}
+      </p>
       <ol className="space-y-5">
         <Step state={stepState(0)} title="Reading the repository">
           {run.ingest ? (
@@ -57,9 +77,9 @@ export function ProgressView({ run, className }: { run: RunState; className?: st
               {run.ingest.repo.owner}/{run.ingest.repo.repo} · {run.ingest.stats.includedFiles} files kept ·{" "}
               {run.ingest.stats.skippedEntries} skipped
             </Meta>
-          ) : (
+          ) : run.phase === "reading" ? (
             <Meta>Downloading and sorting the files…</Meta>
-          )}
+          ) : null}
         </Step>
 
         <Step state={stepState(1)} title="Explaining each file">

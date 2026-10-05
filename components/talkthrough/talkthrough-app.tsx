@@ -40,6 +40,8 @@ export function TalkthroughApp() {
   const [url, setUrl] = useState("");
   const [settings, setSettings] = useState<StoredSettings>(DEFAULT_SETTINGS);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // The automatic first open (no key saved yet) appears without animating.
+  const [settingsAnimate, setSettingsAnimate] = useState(false);
   const [needsKey, setNeedsKey] = useState(false);
   const [run, dispatch] = useReducer(runReducer, null);
   const abortRef = useRef<AbortController | null>(null);
@@ -47,7 +49,12 @@ export function TalkthroughApp() {
   const [formError, setFormError] = useState<FriendlyError | null>(null);
   const [last, setLast] = useState<Walkthrough | null>(null);
   const [shownLast, setShownLast] = useState<Walkthrough | null>(null);
+  // Stored settings aren't known until the browser has loaded them.
+  const [ready, setReady] = useState(false);
   const urlRef = useRef<HTMLInputElement>(null);
+  const errorRef = useRef<HTMLDivElement>(null);
+  // A finished walkthrough a retry would replace, kept so a failed retry can show it again.
+  const priorRef = useRef<Walkthrough | null>(null);
 
   // Settings and the last walkthrough live in localStorage, which only exists in the browser.
   useEffect(() => {
@@ -56,7 +63,22 @@ export function TalkthroughApp() {
     setSettings(stored);
     if (!stored.apiKey) setSettingsOpen(true);
     setLast(loadLast());
+    setReady(true);
     /* eslint-enable react-hooks/set-state-in-effect */
+  }, []);
+
+  // A failure can land below the fold: bring it into view and give it focus.
+  useEffect(() => {
+    if (run?.phase !== "failed") return;
+    const el = errorRef.current;
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.focus({ preventScroll: true });
+  }, [run?.phase]);
+
+  const openSettings = useCallback((open: boolean) => {
+    setSettingsAnimate(true);
+    setSettingsOpen(open);
   }, []);
 
   const updateSettings = useCallback((next: StoredSettings) => {
@@ -77,7 +99,7 @@ export function TalkthroughApp() {
     }
     if (!settings.apiKey.trim() || !settings.model.trim() || !normaliseBaseUrl(settings.baseUrl)) {
       setNeedsKey(true);
-      setSettingsOpen(true);
+      openSettings(true);
       setFormError(
         new FriendlyError(
           "Add your model details first",
@@ -90,17 +112,19 @@ export function TalkthroughApp() {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
+    priorRef.current = resume ? (run?.phase === "done" ? (run.walkthrough ?? null) : shownLast) : null;
     setShownLast(null);
     if (!resume) dispatch({ type: "reset" });
     dispatch({ type: "start", url: target });
+    if (resume) requestAnimationFrame(() => document.getElementById("progress-title")?.focus());
 
     try {
       const result = await ingest(target, controller.signal);
       const plan = buildPlan(result, DEFAULT_OPTIONS.length);
-      const key = runKey(result, settings.model);
+      const key = runKey(result);
       dispatch({ type: "ingested", ingest: result, plan, key });
 
-      // Reuse what an interrupted run of the same repo and model already finished.
+      // Reuse what an interrupted run of the same repo already finished, even with a different model.
       const done: Record<string, SectionResult> = resume && run?.key === key ? { ...run.results } : {};
       if (sessionRef.current?.key !== `${settings.baseUrl}|${settings.model}`) {
         sessionRef.current = { key: `${settings.baseUrl}|${settings.model}`, session: newSession() };
@@ -118,22 +142,41 @@ export function TalkthroughApp() {
       });
 
       if (controller.signal.aborted) return;
-      if (outcome.status === "failed") dispatch({ type: "failed", error: toFriendly(outcome.error) });
+      if (outcome.status === "failed") fail(outcome.error);
       else if (outcome.status === "complete") {
+        priorRef.current = null;
         dispatch({ type: "done", walkthrough: outcome.walkthrough });
         saveLast(outcome.walkthrough);
         setLast(outcome.walkthrough);
-        requestAnimationFrame(() => document.getElementById("result")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+        requestAnimationFrame(() => {
+          document.getElementById("result")?.scrollIntoView({ behavior: "smooth", block: "start" });
+          document.getElementById("result-title")?.focus({ preventScroll: true });
+        });
       }
     } catch (err) {
       if (controller.signal.aborted) return;
-      dispatch({ type: "failed", error: toFriendly(err) });
+      fail(err);
     }
+  }
+
+  function fail(err: unknown) {
+    const error = toFriendly(err);
+    dispatch({ type: "failed", error });
+    // The walkthrough a failed retry was meant to complete stays on screen.
+    if (priorRef.current) setShownLast(priorRef.current);
+    // Problems fixed under Model & key: open it, so the fix is one step away.
+    if (error.code === "auth" || error.code === "credits" || error.code === "model") openSettings(true);
   }
 
   function stop() {
     abortRef.current?.abort();
     dispatch({ type: "stopped" });
+    if (priorRef.current) setShownLast(priorRef.current);
+  }
+
+  function openLast(w: Walkthrough) {
+    setShownLast(w);
+    requestAnimationFrame(() => document.getElementById("result-title")?.focus());
   }
 
   function startOver() {
@@ -197,7 +240,10 @@ export function TalkthroughApp() {
                   {i > 0 && <span aria-hidden>·</span>}
                   <button
                     type="button"
-                    onClick={() => setUrl(`github.com/${ex}`)}
+                    onClick={() => {
+                      setUrl(`github.com/${ex}`);
+                      urlRef.current?.focus();
+                    }}
                     className="cursor-pointer font-mono text-[0.6875rem] text-periwinkle/80 underline-offset-4 transition-colors hover:text-soft-white hover:underline"
                   >
                     {ex}
@@ -208,7 +254,15 @@ export function TalkthroughApp() {
           )}
         </div>
 
-        <SettingsPanel value={settings} onChange={updateSettings} open={settingsOpen} onOpenChange={setSettingsOpen} needsKey={needsKey} />
+        <SettingsPanel
+          value={settings}
+          onChange={updateSettings}
+          open={settingsOpen}
+          onOpenChange={openSettings}
+          needsKey={needsKey}
+          ready={ready}
+          animate={settingsAnimate}
+        />
 
         {formError && (
           <p role="alert" className="text-[0.8125rem] leading-relaxed text-gold/90">
@@ -217,13 +271,24 @@ export function TalkthroughApp() {
         )}
 
         <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+          {/* Separate keys: React must not turn the Stop button into the submit button mid-click. */}
           {busy ? (
-            <Button type="button" variant="outline" size="lg" onClick={stop} className="w-full sm:w-auto">
+            <Button
+              key="stop"
+              type="button"
+              variant="outline"
+              size="lg"
+              onClick={(e) => {
+                e.preventDefault();
+                stop();
+              }}
+              className="w-full sm:w-auto"
+            >
               <Square className="size-3.5" />
               Stop
             </Button>
           ) : (
-            <Button type="submit" size="lg" className="w-full sm:w-auto">
+            <Button key="generate" type="submit" size="lg" className="w-full sm:w-auto">
               <ArrowRight />
               Generate walkthrough
             </Button>
@@ -231,10 +296,10 @@ export function TalkthroughApp() {
         </div>
       </form>
 
-      {!run && !shownLast && last && (
+      {(!run || run.phase === "failed" || run.phase === "stopped") && !shownLast && last && (
         <button
           type="button"
-          onClick={() => setShownLast(last)}
+          onClick={() => openLast(last)}
           className="group mt-5 flex cursor-pointer items-center gap-3 self-start rounded-full px-1 text-left text-[0.8125rem] text-faint transition-colors hover:text-soft-white"
         >
           <History className="size-4 text-periwinkle/70" />
@@ -247,12 +312,12 @@ export function TalkthroughApp() {
       {run && run.phase !== "done" && <ProgressView run={run} className="mt-6" />}
 
       {run?.phase === "failed" && run.error && (
-        <div role="alert" className="panel mt-6 border-l-2 border-l-destructive/50 p-5 sm:p-6">
+        <div ref={errorRef} tabIndex={-1} role="alert" className="panel mt-6 border-l-2 border-l-destructive/50 p-5 outline-none sm:p-6">
           <p className="label-caps text-destructive/80">Couldn&apos;t finish</p>
           <p className="mt-2 font-display text-[1.375rem] font-medium tracking-[-0.01em] text-soft-white">{run.error.title}</p>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{run.error.message}</p>
           {canResume && resumeHint(run.error.code) && <p className="mt-3 text-[0.8125rem] text-faint">{resumeHint(run.error.code)}</p>}
-          {canResume && <ResumeButton onClick={() => void generate(true)} />}
+          {canResume && <ResumeButton className="mt-5" onClick={() => void generate(true)} />}
         </div>
       )}
       {run?.phase === "stopped" && canResume && (
@@ -308,9 +373,9 @@ export function TalkthroughApp() {
   );
 }
 
-function ResumeButton({ onClick }: { onClick: () => void }) {
+function ResumeButton({ onClick, className }: { onClick: () => void; className?: string }) {
   return (
-    <Button type="button" variant="outline" className="mt-4 sm:mt-0" onClick={onClick}>
+    <Button type="button" variant="outline" className={className} onClick={onClick}>
       <RotateCcw className="size-4" />
       Resume
     </Button>

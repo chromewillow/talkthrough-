@@ -73,3 +73,28 @@ test("rejects links that aren't GitHub repositories", async ({ page }) => {
   await page.getByRole("button", { name: "Generate walkthrough" }).click();
   await expect(page.getByRole("alert").filter({ hasText: "only reads GitHub repositories" })).toBeVisible({ timeout: 30_000 });
 });
+
+test("stops a run and resumes without redoing finished parts", async ({ page }) => {
+  let ingests = 0;
+  let chats = 0;
+  page.on("request", (r) => {
+    if (r.url().includes("/api/ingest")) ingests++;
+    if (r.method() === "POST" && r.url().endsWith("/chat/completions")) chats++;
+  });
+  await configure(page, { model: "slow" });
+  await page.getByRole("button", { name: "Generate walkthrough" }).click();
+  await expect(page.getByText(/^[1-9]\d* of \d+ parts$/)).toBeVisible({ timeout: 30_000 });
+
+  // A real click: the Stop button must not turn into the submit button mid-click.
+  await page.getByRole("button", { name: "Stop" }).click();
+  await expect(page.getByText("Stopped. Finished parts are kept if you resume.")).toBeVisible();
+  expect(ingests).toBe(1);
+  const [finished, total] = (await page.getByText(/^\d+ of \d+ parts$/).innerText()).match(/\d+/g)!.map(Number);
+  expect(finished).toBeGreaterThan(0);
+
+  const before = chats;
+  await page.getByRole("button", { name: "Resume" }).click();
+  await expect(page.getByRole("heading", { name: "A guided tour of notes-app" })).toBeVisible({ timeout: 90_000 });
+  // Only the unfinished parts, the introduction and the closing are written again.
+  expect(chats - before).toBeLessThanOrEqual(total - finished + 2);
+});

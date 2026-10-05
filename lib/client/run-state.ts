@@ -6,7 +6,7 @@ import type { FriendlyError } from "./ingest";
 export type RunPhase = "reading" | "explaining" | "overview" | "done" | "failed" | "stopped";
 
 export type RunState = {
-  /** Identity for resuming: same repo, ref and model. */
+  /** Identity for resuming: same repo, ref and folder. Finished parts survive a model change. */
   key: string;
   url: string;
   phase: RunPhase;
@@ -129,7 +129,7 @@ function pick<T>(obj: Record<string, T>, keys: string[]): Record<string, T> {
   return out;
 }
 
-export function runKey(ingest: IngestResult, model: string) {
+export function runKey(ingest: IngestResult) {
   const { owner, repo, ref, subpath } = ingest.repo;
-  return [owner, repo, ref, subpath, model.trim()].join("|").toLowerCase();
+  return [owner, repo, ref, subpath].join("|").toLowerCase();
 }

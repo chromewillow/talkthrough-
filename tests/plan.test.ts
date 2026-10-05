@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { analyzeFiles } from "@/lib/ingest/analyze";
 import type { IngestResult } from "@/lib/ingest/types";
 import { buildPlan, chunkContent, isTrivial } from "@/lib/narrate/plan";
-import { coreTerms, collectDeps } from "@/lib/narrate/prompts";
+import { coreTerms, collectDeps, spokenFileNames } from "@/lib/narrate/prompts";
 import { sentenceCase } from "@/lib/narrate/pipeline";
 
 const lines = (n: number, prefix = "const x") => Array.from({ length: n }, (_, i) => `${prefix}${i} = ${i};`).join("\n");
@@ -95,6 +95,60 @@ describe("tour order and chapters", () => {
       "app/page.tsx": `export default function Page() { const [a] = useState(0); return a }\n${lines(10)}`,
     });
     expect(coreTerms(collectDeps(modern.files), modern.files)).toEqual(["component", "props", "state", "hook", "route", "server component"]);
+  });
+
+  it("plays shared foundations in the core chapter and the host page right after the entry", () => {
+    const comps = Object.fromEntries(
+      Array.from({ length: 5 }, (_, i) => [`src/components/C${i}.jsx`, `import { NAMES } from "../constants/names";\n${lines(60)}`]),
+    );
+    const ingest = ingestOf({
+      "package.json": '{ "dependencies": { "react": "16" } }',
+      "public/index.html": '<!doctype html>\n<html>\n  <head>\n    <title>Demo</title>\n  </head>\n  <body>\n    <div id="root"></div>\n  </body>\n</html>',
+      "src/index.jsx": `import { App } from "./App";\n${lines(10)}`,
+      "src/App.jsx": `${Object.keys(comps).map((p, i) => `import { C${i} } from "./${p.slice(4, -4)}";`).join("\n")}\n${lines(60)}`,
+      "src/constants/names.js": lines(30, "export const NAME_"),
+      ...comps,
+    });
+    const plan = buildPlan(ingest);
+    const ids = plan.sections.map((s) => s.id);
+    expect(plan.sections.find((s) => s.id === "file:public/index.html")?.chapter).toBe("start");
+    expect(ids.indexOf("file:public/index.html")).toBeLessThan(ids.indexOf("file:src/constants/names.js"));
+    expect(plan.sections.find((s) => s.id === "file:src/constants/names.js")?.chapter).toBe("core");
+  });
+
+  it("merges a one-part chapter into its neighbour and names the last chapter after its contents", () => {
+    const ingest = ingestOf({
+      "package.json": '{ "dependencies": { "react": "19" } }',
+      "src/main.jsx": `import { App } from "./App";\n${lines(10)}`,
+      "src/App.jsx": `import { fmt } from "./utils/format";\n${lines(60)}`,
+      "src/utils/format.js": lines(60, "export const f"),
+    });
+    const plan = buildPlan(ingest);
+    const last = plan.sections.slice(-2);
+    expect(last.map((s) => s.chapter)).toEqual(["setup", "setup"]);
+    expect(plan.chapterTitles?.setup).toBe("Supporting pieces and setup");
+  });
+
+  it("gives every file one spoken name, with the folder when the name alone is generic", () => {
+    const names = spokenFileNames([
+      "src/reducer.js",
+      "src/reducers/articleList.js",
+      "src/components/Article/index.js",
+      "src/components/Article/CommentInput.js",
+      "src/agent.js",
+      "src/constants/actionTypes.js",
+      "src/a/helpers.ts",
+      "src/b/helpers.ts",
+      "src/components/App.js",
+    ]);
+    expect(names.get("src/components/App.js")).toBe("the App component");
+    expect(names.get("src/reducer.js")).toBe("the top-level reducer file");
+    expect(names.get("src/reducers/articleList.js")).toBe("the article list reducer");
+    expect(names.get("src/components/Article/index.js")).toBe("the index file in the Article folder");
+    expect(names.get("src/components/Article/CommentInput.js")).toBe("the Comment Input component");
+    expect(names.get("src/agent.js")).toBe("the agent file");
+    expect(names.get("src/constants/actionTypes.js")).toBe("the action types file");
+    expect(names.get("src/a/helpers.ts")).toBe("the helpers file in the a folder");
   });
 
   it("puts over-capitalised titles into sentence case", () => {

@@ -52,6 +52,14 @@ export function toSpeakable(input: string): string {
   t = t.replace(/\s~\s?(\d)/g, " about $1");
   // Product and file names with dots: "Next.js" → "Next JS", "package.json" → "package JSON".
   t = t.replace(/\b([A-Za-z][\w-]*)\.js\b/g, "$1 JS").replace(/\b([A-Za-z][\w-]*)\.json\b/g, "$1 JSON");
+  // Code names a voice would spell out or mash together: SET_PAGE, mapDispatchToProps.
+  t = t.replace(/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/g, screamingToWords);
+  t = t.replace(/\b[a-z][a-z0-9]*(?:[A-Z]+[a-z0-9]*)+\b/g, camelToWords);
+  // Trailing-off dots: "here... yet" → "here, yet".
+  t = t.replace(/(\w)[ \t]*(?:\.{3}|…)[ \t]+(?=[a-z])/g, "$1, ");
+  t = t.replace(/(\w)[ \t]*(?:\.{3}|…)(?=[ \t]*(?:[A-Z\n]|$))/g, "$1.");
+  // Folder shorthand a voice reads letter by letter.
+  t = t.replace(/(?<![\w/.-])src(?![\w/.-])/g, "source").replace(/(?<![\w/.-])utils(?![\w/.-])/g, "utilities");
   // Lowercase acronyms get read as words ("id" as in Freud); capitals get spelled out.
   t = t.replace(/\b(id|url|api|json|html|css|ui|sql|jwt|http|https|cli|sdk|llm)(s?)\b/g, (_, a: string, plural: string) => a.toUpperCase() + plural);
   t = polishPhrasing(t);
@@ -71,6 +79,29 @@ export function toSpeakable(input: string): string {
   return t;
 }
 
+const ACRONYMS = new Set(["API", "URL", "ID", "IDS", "JWT", "HTTP", "HTTPS", "UI", "SQL", "CSS", "HTML", "JSON", "CLI", "SDK", "LLM", "AI", "DB", "AWS", "S3", "DOM", "XML", "PDF", "CSV", "SMS", "OTP", "TTL", "CORS", "CSRF", "OAUTH", "SSO", "MFA", "UUID"]);
+const CAMEL_KEEP = new Set(["iPhone", "iPad", "iOS", "iPadOS", "macOS", "watchOS", "tvOS", "visionOS", "eBay", "jQuery", "tRPC", "gRPC", "iCloud", "pH"]);
+
+/** SET_PAGE → "set page"; NEXT_PUBLIC_API_URL → "next public API URL". */
+export function screamingToWords(name: string): string {
+  return name
+    .split("_")
+    .filter(Boolean)
+    .map((w) => (ACRONYMS.has(w) ? (w === "IDS" ? "IDs" : w) : w.toLowerCase()))
+    .join(" ");
+}
+
+/** mapDispatchToProps → "map dispatch to props"; innerHTML → "inner HTML". */
+export function camelToWords(name: string): string {
+  if (CAMEL_KEEP.has(name)) return name;
+  return name
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(" ")
+    .map((w) => (/^[A-Z][a-z0-9]*$/.test(w) && w.length > 1 ? w.toLowerCase() : w))
+    .join(" ");
+}
+
 /**
  * Removes the filler and screen-bound phrases the prompts ban but models
  * still slip in now and then. Only unambiguous patterns are touched.
@@ -88,6 +119,15 @@ export function polishPhrasing(input: string): string {
   // Positions in a file the listener can't see.
   t = t.replace(/\bat the (?:very )?(?:bottom|end) of (?:the|this) file\b/gi, "toward the end of the file");
   t = t.replace(/\b(?:at|near) the (?:very )?top of (?:the|this) file\b/gi, "early in the file");
+  // Stock back-references: the file's name already says which one.
+  t = t.replace(/\b(?:As|Like) we (?:just )?(?:heard|saw|covered|discussed)(?: about)?(?: (?:earlier|before|already))?, (\w)/g, (_, c: string) => c.toUpperCase());
+  t = t.replace(
+    /(?<!\b(?:everything|anything|something|all|what|that|this|those|these))(?<=[A-Za-z]) (?:that |which )?we (?:heard about|heard|covered|talked about|met)(?: (?:earlier|before|early on|already|a moment ago))?(?=[\s,.;:])/g,
+    "",
+  );
+  // Labelled morals at the end of a part.
+  t = t.replace(/\b(?:The (?:takeaway|upshot|bottom line|short version)|Bottom line|In short)(?: here)?(?: is)?(?: (?:simple|this|that))?[:,] (\w)/g, (_, c: string) => c.toUpperCase());
+  t = t.replace(/\bThe (?:takeaway|upshot)(?: here)? is that (\w)/g, (_, c: string) => c.toUpperCase());
   return t;
 }
 
@@ -100,13 +140,21 @@ export function normaliseParagraphs(text: string): string {
     .join("\n\n");
 }
 
-export type ParsedSection = { title: string | null; body: string; summary: string | null; changes: string | null };
+export type ParsedSection = {
+  title: string | null;
+  body: string;
+  summary: string | null;
+  changes: string | null;
+  terms: string[];
+  name: string | null;
+};
 
 const TITLE_RE = /^[ \t>*_#]*TITLE[ \t*_]*[:：][ \t*_]*(.+)$/im;
-const SUMMARY_RE = /^[ \t>*_#]*SUMMARY[ \t*_]*[:：][ \t*_]*([\s\S]+)$/im;
-const CHANGES_RE = /^[ \t>*_#]*CHANGES[ \t*_]*[:：][ \t*_]*([\s\S]+)$/im;
+const NAME_RE = /^[ \t>*_#]*NAME[ \t*_]*[:：][ \t*_]*(.+)$/m;
+/** Lines after the narration, in any order: "CHANGES: …", "TERMS: …", "SUMMARY: …". */
+const TRAILER_RE = /^[ \t>*_#]*(CHANGES|TERMS|SUMMARY)[ \t*_]*[:：][ \t*_]*/gim;
 
-/** Splits a "TITLE: … / narration / SUMMARY: …" reply into its parts. */
+/** Splits a "TITLE: … / narration / CHANGES / TERMS / SUMMARY" reply into its parts. */
 export function parseSectionReply(raw: string): ParsedSection {
   let text = raw.trim();
   // Some models wrap the whole reply in a code fence.
@@ -114,26 +162,32 @@ export function parseSectionReply(raw: string): ParsedSection {
   if (fenced) text = fenced[1].trim();
 
   let title: string | null = null;
-  let summary: string | null = null;
-  let changes: string | null = null;
+  let name: string | null = null;
+  const trailers: Record<string, string> = {};
 
-  const s = text.match(SUMMARY_RE);
-  if (s && s.index !== undefined) {
-    summary = cleanInline(s[1]);
-    text = text.slice(0, s.index).trim();
+  // Everything from the first trailer label on is trailers; each runs to the next label.
+  const labels = [...text.matchAll(TRAILER_RE)];
+  if (labels.length) {
+    labels.forEach((m, i) => {
+      const end = i + 1 < labels.length ? labels[i + 1].index : text.length;
+      const key = m[1].toUpperCase();
+      trailers[key] ??= text.slice(m.index + m[0].length, end).trim();
+    });
+    text = text.slice(0, labels[0].index).trim();
   }
-  // CHANGES comes before SUMMARY in the format, but models sometimes swap them.
-  const c = text.match(CHANGES_RE);
-  if (c && c.index !== undefined) {
-    changes = cleanInline(c[1]);
-    text = text.slice(0, c.index).trim();
-  }
-  if (summary) {
-    const inSummary = summary.match(/\bCHANGES[ \t*_]*[:：][ \t*_]*(.+)$/i);
+  // A summary that swallowed a CHANGES note on the same line.
+  if (trailers.SUMMARY && !trailers.CHANGES) {
+    const inSummary = trailers.SUMMARY.match(/\bCHANGES[ \t*_]*[:：][ \t*_]*(.+)$/i);
     if (inSummary && inSummary.index !== undefined) {
-      changes ??= inSummary[1].trim();
-      summary = summary.slice(0, inSummary.index).trim();
+      trailers.CHANGES = inSummary[1].trim();
+      trailers.SUMMARY = trailers.SUMMARY.slice(0, inSummary.index).trim();
     }
+  }
+
+  const n = text.match(NAME_RE);
+  if (n && n.index !== undefined && n.index < 400) {
+    name = cleanInline(n[1]).replace(/[.。]$/, "") || null;
+    text = (text.slice(0, n.index) + text.slice(n.index + n[0].length)).trim();
   }
   const t = text.match(TITLE_RE);
   if (t && t.index !== undefined && t.index < 400) {
@@ -152,11 +206,21 @@ export function parseSectionReply(raw: string): ParsedSection {
   text = text.replace(/^[ \t*_]*(NARRATION|BODY|SCRIPT)[ \t*_]*[:：][ \t]*/im, "");
 
   const body = normaliseParagraphs(toSpeakable(text));
+  const summary = trailers.SUMMARY ? cleanInline(trailers.SUMMARY) : "";
+  const changes = trailers.CHANGES ? cleanInline(trailers.CHANGES) : "";
+  const terms = trailers.TERMS && !/^none\.?$/i.test(trailers.TERMS.trim())
+    ? trailers.TERMS.split(/[,;\n]/)
+        .map((x) => x.replace(/^[\s*_"“'-]+|[\s*_"”'.]+$/g, "").toLowerCase())
+        .filter((x) => x && x.length <= 40)
+        .slice(0, 12)
+    : [];
   return {
     title: title ? title.slice(0, 120) : null,
     body,
     summary: summary || null,
     changes: changes && !/^none\.?$/i.test(changes) ? changes : null,
+    terms,
+    name: name ? name.slice(0, 80) : null,
   };
 }
 

@@ -3,7 +3,7 @@
  * a listening script for a text-to-speech app, and a Markdown document for
  * reading and reference (with file paths, which the script leaves out).
  */
-import { CHAPTER_TITLES, type SectionResult, type Walkthrough } from "./types";
+import { chapterTitle, type SectionResult, type Walkthrough } from "./types";
 
 const ONES = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"];
 const TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
@@ -43,7 +43,7 @@ export type Chapter = { title: string; sections: { section: SectionResult; numbe
 export function chaptersOf(w: Walkthrough): Chapter[] {
   const chapters: Chapter[] = [];
   w.sections.forEach((section, i) => {
-    const title = section.chapter ? CHAPTER_TITLES[section.chapter] : "";
+    const title = section.chapter ? (section.chapterTitle ?? chapterTitle(section.chapter)) : "";
     const last = chapters[chapters.length - 1];
     if (last && last.title === title) last.sections.push({ section, number: i + 1 });
     else chapters.push({ title, sections: [{ section, number: i + 1 }] });
@@ -55,14 +55,14 @@ const CLOSING_LINE = "Last stop. Where to go when you want to change something."
 
 /** Plain text written to be read aloud: no symbols, no paths, spoken chapter headings. */
 export function toListeningText(w: Walkthrough): string {
-  const parts: string[] = [sentence(`A guided tour of ${spokenName(w.repo.repo)}`), w.overview.trim()];
+  const parts: string[] = [sentence(`A guided tour of ${w.name ?? spokenName(w.repo.repo)}`), w.overview.trim()];
   const chapters = chaptersOf(w);
   const titled = chapters.some((c) => c.title);
   chapters.forEach((chapter, c) => {
     if (titled && chapter.title) parts.push(`Chapter ${numberWords(c + 1)}. ${sentence(chapter.title)}`);
     for (const { section, number } of chapter.sections) {
-      // With chapters, each part is announced by its title alone; without, by number.
-      parts.push(titled ? sentence(section.title) : `Part ${numberWords(number)}. ${sentence(section.title)}`);
+      // A spoken number marks the boundary; a bare title can sound like a stray sentence.
+      parts.push(`Part ${numberWords(number)}. ${sentence(section.title)}`);
       parts.push(section.body.trim());
     }
   });

@@ -9,7 +9,7 @@ import { chat, isFatal, LlmError, newSession, withRetries, type LlmErrorKind, ty
 import { sectionLabel, sectionPaths } from "./plan";
 import { buildContext, closingMessages, fileMessages, groupMessages, overviewMessages, type ChatMessage, type PromptContext } from "./prompts";
 import { firstSentences, normaliseParagraphs, parseSectionReply, toSpeakable } from "./speakable";
-import type { Chunk, FileSection, GroupSection, LlmSettings, NarrationOptions, NarrationPlan, PlanSection, SectionResult, Walkthrough } from "./types";
+import { chapterTitle, type Chunk, type FileSection, type GroupSection, type LlmSettings, type NarrationOptions, type NarrationPlan, type PlanSection, type SectionResult, type Walkthrough } from "./types";
 
 export type PipelineEvent =
   | { type: "phase"; phase: "explaining" | "overview" }
@@ -81,8 +81,12 @@ export async function runWalkthrough(input: RunInput): Promise<RunOutcome> {
         const section = queue.shift()!;
         onEvent({ type: "section-start", id: section.id });
         try {
+          // Parts are written a few at a time; each sees whatever finished before it starts.
+          const earlier = new Map(Object.entries(results));
           const result =
-            section.kind === "file" ? await explainFile(ctx, section, call, onEvent) : await explainGroup(ctx, section, call);
+            section.kind === "file"
+              ? await explainFile(ctx, section, call, onEvent, earlier)
+              : await explainGroup(ctx, section, call, earlier);
           results[section.id] = result;
           consecutiveFailures = 0;
           onEvent({ type: "section-done", result });
@@ -126,18 +130,20 @@ export async function runWalkthrough(input: RunInput): Promise<RunOutcome> {
     if (input.includeOverview === false) return { status: "sections", sections: ordered };
 
     onEvent({ type: "phase", phase: "overview" });
-    const [overviewReply, closingReply] = await Promise.all([
-      call(overviewMessages(ctx, ordered), "the overview", 0.5),
-      call(closingMessages(ctx, ordered), "the closing guide", 0.5),
-    ]);
     const prose = (r: Reply) => (r.truncated ? endAtSentence(cleanProse(r.text)) : cleanProse(r.text));
+    // The closing builds on the introduction, so it's written second.
+    const overviewReply = await call(overviewMessages(ctx, ordered), "the overview", 0.5);
+    const overview = prose(overviewReply);
+    const name = parseSectionReply(overviewReply.text).name;
+    const closingReply = await call(closingMessages(ctx, ordered, overview), "the closing guide", 0.5);
 
     const walkthrough: Walkthrough = {
       repo: ingest.repo,
+      name: name ?? undefined,
       model: settings.model,
       createdAt: new Date().toISOString(),
-      title: `A guided tour of ${ingest.repo.repo}`,
-      overview: prose(overviewReply),
+      title: `A guided tour of ${name ?? ingest.repo.repo}`,
+      overview,
       closing: prose(closingReply),
       sections: ordered,
       missing: plan.sections.filter((s) => !results[s.id]).map((s) => ({ id: s.id, label: sectionLabel(s) })),
@@ -174,10 +180,12 @@ async function explainFile(
   section: FileSection,
   call: Call,
   onEvent: (e: PipelineEvent) => void,
+  earlierResults: Map<string, SectionResult> = new Map(),
 ): Promise<SectionResult> {
   const bodies: string[] = [];
   const summaries: string[] = [];
   const changes: string[] = [];
+  const terms = new Set<string>();
   let title: string | null = null;
   let chunks = section.chunks;
 
@@ -188,7 +196,7 @@ async function explainFile(
     if (bodies.length) earlier.push(`The previous part ended with: "${lastParagraph(bodies[bodies.length - 1])}"`);
     let reply: Reply;
     try {
-      reply = await call(fileMessages(ctx, section, chunk, earlier), section.path);
+      reply = await call(fileMessages(ctx, section, chunk, earlier, earlierResults), section.path);
     } catch (err) {
       // Too long for this model's context window: split this part in two and carry on.
       const halves = err instanceof LlmError && err.kind === "context" && chunk.text.length > 4000 && chunks.length < 24 ? halve(chunk) : null;
@@ -208,6 +216,7 @@ async function explainFile(
     bodies.push(parsed.body);
     summaries.push(parsed.summary ?? firstSentences(parsed.body));
     if (parsed.changes) changes.push(parsed.changes);
+    parsed.terms.forEach((t) => terms.add(t));
   }
 
   return {
@@ -217,19 +226,26 @@ async function explainFile(
     summary: summaries.length > 1 ? summaries.map((s) => firstSentences(s, 1)).join(" ") : summaries[0],
     paths: [section.path],
     chapter: section.chapter,
+    chapterTitle: chapterTitle(section.chapter, ctx.plan.chapterTitles),
     changes: changes.join(" ") || undefined,
+    terms: [...terms],
   };
 }
 
-async function explainGroup(ctx: PromptContext, section: GroupSection, call: Call): Promise<SectionResult> {
+async function explainGroup(
+  ctx: PromptContext,
+  section: GroupSection,
+  call: Call,
+  earlier: Map<string, SectionResult> = new Map(),
+): Promise<SectionResult> {
   let reply: Reply;
   try {
-    reply = await call(groupMessages(ctx, section), section.title);
+    reply = await call(groupMessages(ctx, section, earlier), section.title);
   } catch (err) {
     if (!(err instanceof LlmError && err.kind === "context")) throw err;
     // Show less of each file and try once more.
     const smaller = { ...ctx, budget: { ...ctx.budget, groupChars: Math.floor(ctx.budget.groupChars / 3) } };
-    reply = await call(groupMessages(smaller, section), section.title);
+    reply = await call(groupMessages(smaller, section, earlier), section.title);
   }
   const parsed = parseSectionReply(reply.text);
   if (!parsed.body) throw new LlmError("empty", "The model's answer had no narration in it.");
@@ -241,7 +257,9 @@ async function explainGroup(ctx: PromptContext, section: GroupSection, call: Cal
     summary: parsed.summary ?? firstSentences(parsed.body),
     paths: sectionPaths(section),
     chapter: section.chapter,
+    chapterTitle: chapterTitle(section.chapter, ctx.plan.chapterTitles),
     changes: parsed.changes ?? undefined,
+    terms: parsed.terms,
   };
 }
 

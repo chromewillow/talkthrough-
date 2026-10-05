@@ -5,7 +5,7 @@
  * and configuration last.
  */
 import type { FileCategory, IngestResult, RepoFile } from "@/lib/ingest/types";
-import type { ChapterKey, Chunk, Depth, GroupKind, GroupSection, NarrationLength, NarrationPlan, PlanSection } from "./types";
+import { CHAPTER_TITLES, type ChapterKey, type Chunk, type Depth, type GroupKind, type GroupSection, type NarrationLength, type NarrationPlan, type PlanSection } from "./types";
 
 export type Budget = {
   /** Most files that get a full-length section. */
@@ -24,6 +24,8 @@ export type Budget = {
   chunkChars: number;
   /** Characters of source shown for a whole group. */
   groupChars: number;
+  /** Characters of related code from linked files shown with each part. */
+  relatedChars: number;
 };
 
 export const BUDGETS: Record<NarrationLength, Budget> = {
@@ -39,6 +41,7 @@ export const BUDGETS: Record<NarrationLength, Budget> = {
     closingWords: [180, 280],
     chunkChars: 24_000,
     groupChars: 24_000,
+    relatedChars: 3500,
   },
   // Aims for roughly 45 to 75 minutes of listening on a mid-sized app.
   medium: {
@@ -53,6 +56,7 @@ export const BUDGETS: Record<NarrationLength, Budget> = {
     closingWords: [300, 450],
     chunkChars: 24_000,
     groupChars: 30_000,
+    relatedChars: 5000,
   },
   long: {
     maxFull: 80,
@@ -66,6 +70,7 @@ export const BUDGETS: Record<NarrationLength, Budget> = {
     closingWords: [400, 600],
     chunkChars: 24_000,
     groupChars: 36_000,
+    relatedChars: 6000,
   },
 };
 
@@ -175,7 +180,9 @@ function orderTier(files: RepoFile[], tier: FileCategory, reach: Map<string, num
   }
   if (tier === "entry") {
     // Root layouts before pages; otherwise in start-up order (what loads what).
-    const rank = (f: RepoFile) => (/(^|\/)layout\.[jt]sx?$/.test(f.path) ? 0 : /(^|\/)page\.[jt]sx?$/.test(f.path) ? 1 : 2);
+    // The HTML page an entry script mounts into plays right after it.
+    const rank = (f: RepoFile) =>
+      /(^|\/)layout\.[jt]sx?$/.test(f.path) ? 0 : /(^|\/)page\.[jt]sx?$/.test(f.path) ? 1 : /\.html?$/.test(f.path) ? 3 : 2;
     const at = (f: RepoFile) => reach.get(f.path) ?? Number.MAX_SAFE_INTEGER;
     return [...files].sort((a, b) => rank(a) - rank(b) || at(a) - at(b) || b.importance - a.importance);
   }
@@ -340,7 +347,15 @@ export function buildPlan(ingest: IngestResult, length: NarrationLength = "mediu
   // Components a root entry mounts directly (the app shell, the router)
   // describe the app's screens, so they play with the routes.
   const shell = new Set(roots.flatMap((f) => f.imports));
-  const tierOf = (f: RepoFile): FileCategory => (f.category === "component" && shell.has(f.path) ? "route" : f.category);
+  // Helpers most of the code relies on, like a list of every action name, are
+  // foundations: hearing them early means later parts can lean on them.
+  const codeCount = files.filter((f) => ["entry", "route", "core", "component", "helper"].includes(f.category)).length;
+  const isFoundation = (f: RepoFile) => f.category === "helper" && f.importedBy.length >= Math.max(4, Math.ceil(codeCount * 0.25));
+  // A single-page app's HTML shell, which the entry script mounts into.
+  const isHostPage = (f: RepoFile) =>
+    roots.length > 0 && /(^|\/)index\.html?$/.test(f.path) && /\bid\s*=\s*["'](root|app|__next|main)["']/.test(f.content);
+  const tierOf = (f: RepoFile): FileCategory =>
+    isHostPage(f) ? "entry" : isFoundation(f) ? "core" : f.category === "component" && shell.has(f.path) ? "route" : f.category;
 
   // Depth-first walk of the import graph from the entry points and routes, in
   // source order: the order a person would meet each screen and its pieces.
@@ -487,7 +502,36 @@ export function buildPlan(ingest: IngestResult, length: NarrationLength = "mediu
     seen.set(sec.id, n + 1);
     if (n > 0) sec.id = `${sec.id}#${n + 1}`;
   }
-  return { sections, omitted: [...omitted, ...trivialPaths] };
+  return { sections, omitted: [...omitted, ...trivialPaths], chapterTitles: shapeChapters(sections) };
+}
+
+function joinAnd(items: string[]) {
+  return items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+/**
+ * A chapter of one short part sounds like a stray heading, so the last two
+ * chapters merge when either is that small. The final chapter is named after
+ * what it actually holds: no "tests" in the title of a repo without any.
+ */
+function shapeChapters(sections: PlanSection[]): Partial<Record<ChapterKey, string>> {
+  const titles: Partial<Record<ChapterKey, string>> = {};
+  const count = (k: ChapterKey) => sections.filter((s) => s.chapter === k).length;
+  const merged = count("support") > 0 && count("setup") > 0 && (count("support") === 1 || count("setup") === 1);
+  if (merged) for (const sec of sections) if (sec.chapter === "support") sec.chapter = "setup";
+  if (!count("setup")) return titles;
+
+  const kinds = new Set(sections.filter((s) => s.chapter === "setup" && s.kind === "group").map((s) => (s as GroupSection).groupKind));
+  const items: string[] = [];
+  if (merged) items.push("supporting pieces");
+  if (kinds.has("config") || kinds.has("scripts")) items.push("setup");
+  if (kinds.has("tests")) items.push("tests");
+  if (kinds.has("docs")) items.push("docs");
+  const title =
+    items.length === 0 ? "Setup and the rest" : items.length === 1 && items[0] === "setup" ? "The project setup" : joinAnd(items);
+  const spoken = title.charAt(0).toUpperCase() + title.slice(1);
+  if (spoken !== CHAPTER_TITLES.setup) titles.setup = spoken;
+  return titles;
 }
 
 export function sectionLabel(section: PlanSection): string {

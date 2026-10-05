@@ -62,6 +62,42 @@ describe("runWalkthrough", () => {
     expect(events.filter((e) => e.type === "section-done")).toHaveLength(plan.sections.length);
   });
 
+  it("tells later parts what earlier ones established, and writes the closing after the introduction", async () => {
+    const prompts: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_u: string, init: RequestInit) => {
+        const user = JSON.parse(init.body as string).messages[1].content as string;
+        prompts.push(user);
+        const file = user.match(/<file path="([^"]+)">/)?.[1];
+        if (user.includes("closing part")) return ok("Closing words.");
+        if (!user.includes("TITLE:")) return ok("NAME: Demo\n\nOverview words.");
+        return ok(`TITLE: About ${file ?? "group"}\n\nNarration.\n\nTERMS: widget\n\nSUMMARY: Facts from ${file ?? "group"}.`);
+      }),
+    );
+    const ingest = demo();
+    const plan = buildPlan(ingest);
+    const outcome = await runWalkthrough({
+      ingest,
+      plan,
+      settings,
+      options: { length: "medium", concurrency: 1 },
+      signal: new AbortController().signal,
+      onEvent: () => {},
+      session: newSession(),
+    });
+    expect(outcome.status).toBe("complete");
+    if (outcome.status !== "complete") return;
+    const second = prompts.find((p) => p.includes(`<file path="${plan.sections[1].kind === "file" ? plan.sections[1].path : ""}">`))!;
+    expect(second).toContain("<heard>");
+    expect(second).toContain("Facts from src/index.ts.");
+    expect(second).toMatch(/already had explained: [^\n]*widget/);
+    expect(outcome.walkthrough.name).toBe("Demo");
+    expect(outcome.walkthrough.title).toBe("A guided tour of Demo");
+    expect(outcome.walkthrough.overview).toBe("Overview words.");
+    expect(prompts[prompts.length - 1]).toContain("<introduction>\nOverview words.\n</introduction>");
+  });
+
   it("skips sections finished by an earlier attempt", async () => {
     const fetchMock = vi.fn(async (_u: string, init: RequestInit) => reply(init));
     vi.stubGlobal("fetch", fetchMock);

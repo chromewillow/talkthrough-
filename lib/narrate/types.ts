@@ -78,8 +78,15 @@ export type GroupSection = {
 
 export type PlanSection = FileSection | GroupSection;
 
+/** A chapter's spoken title: the plan's, or the default for its key. */
+export function chapterTitle(key: ChapterKey, titles?: Partial<Record<ChapterKey, string>>): string {
+  return titles?.[key] ?? CHAPTER_TITLES[key];
+}
+
 export type NarrationPlan = {
   sections: PlanSection[];
+  /** Chapter titles that differ from the defaults, such as a setup chapter with no tests in it. */
+  chapterTitles?: Partial<Record<ChapterKey, string>>;
   /** Files we kept but didn't narrate (they still appear in the overview's map). */
   omitted: string[];
 };
@@ -92,12 +99,18 @@ export type SectionResult = {
   paths: string[];
   /** Which chapter of the tour this part belongs to. */
   chapter?: ChapterKey;
+  /** The chapter's spoken title, when it isn't the default for its key. */
+  chapterTitle?: string;
+  /** Terms this part explained, so later parts don't explain them again. */
+  terms?: string[];
   /** The model's note on the most useful change here, for the closing guide. */
   changes?: string;
 };
 
 export type Walkthrough = {
   repo: RepoInfo;
+  /** The app's name as said aloud, such as "Conduit", when the introduction gave one. */
+  name?: string;
   model: string;
   createdAt: string;
   title: string;

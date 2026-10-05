@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { firstSentences, parseSectionReply, polishPhrasing, toSpeakable } from "@/lib/narrate/speakable";
+import { camelToWords, firstSentences, parseSectionReply, polishPhrasing, screamingToWords, toSpeakable } from "@/lib/narrate/speakable";
 
 describe("toSpeakable", () => {
   it("strips markdown a voice would read out", () => {
@@ -40,7 +40,41 @@ describe("toSpeakable", () => {
   });
 });
 
+describe("code names", () => {
+  it("turns constants and camel case into words a voice can say", () => {
+    expect(screamingToWords("SET_PAGE")).toBe("set page");
+    expect(screamingToWords("NEXT_PUBLIC_API_URL")).toBe("next public API URL");
+    expect(camelToWords("mapDispatchToProps")).toBe("map dispatch to props");
+    expect(camelToWords("innerHTML")).toBe("inner HTML");
+    expect(camelToWords("iPhone")).toBe("iPhone");
+    expect(toSpeakable("It dispatches SET_PAGE from mapDispatchToProps.")).toBe("It dispatches set page from map dispatch to props.");
+  });
+
+  it("smooths trailing-off dots and folder shorthand", () => {
+    expect(toSpeakable("A line that reads No articles are here... yet.")).toBe("A line that reads No articles are here, yet.");
+    expect(toSpeakable("It lives in the src folder.")).toBe("It lives in the source folder.");
+  });
+
+  it("drops stock back-references and labelled morals", () => {
+    expect(polishPhrasing("The middleware we covered earlier waits for it.")).toBe("The middleware waits for it.");
+    expect(polishPhrasing("As we heard earlier, the store holds it.")).toBe("The store holds it.");
+    expect(polishPhrasing("Unlike everything we heard about earlier, it waits.")).toBe("Unlike everything we heard about earlier, it waits.");
+    expect(polishPhrasing("The takeaway: keep both lists in step.")).toBe("Keep both lists in step.");
+    expect(polishPhrasing("The takeaway is that both lists must match.")).toBe("Both lists must match.");
+  });
+});
+
 describe("parseSectionReply", () => {
+  it("reads the terms a part explained and an app name", () => {
+    const r = parseSectionReply("TITLE: The store\n\nThe store holds it.\n\nCHANGES: none\n\nTERMS: reducer, Slug.\n\nSUMMARY: The store.");
+    expect(r.terms).toEqual(["reducer", "slug"]);
+    expect(r.changes).toBeNull();
+    expect(r.summary).toBe("The store.");
+    const o = parseSectionReply("NAME: Conduit\n\nConduit is a blogging site.");
+    expect(o.name).toBe("Conduit");
+    expect(o.body).toBe("Conduit is a blogging site.");
+  });
+
   it("splits title, body and summary", () => {
     const r = parseSectionReply("TITLE: The chat route.\n\nFirst paragraph\nstill first.\n\nSecond one.\n\nSUMMARY: Handles chat.");
     expect(r.title).toBe("The chat route");

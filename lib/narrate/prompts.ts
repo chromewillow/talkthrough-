@@ -5,8 +5,9 @@
  */
 import type { IngestResult, RepoFile, RepoInfo } from "@/lib/ingest/types";
 import { buildTree, type TreeDirNode } from "@/lib/tree";
+import { buildLinkIndex, relatedExcerpts, type LinkIndex, type RelatedExcerpt } from "./links";
 import { BUDGETS, MAX_GROUP_FILES, sectionLabel, type Budget } from "./plan";
-import { CHAPTER_TITLES, type ChapterKey, type Chunk, type FileSection, type GroupKind, type GroupSection, type NarrationLength, type NarrationPlan, type SectionResult } from "./types";
+import { chapterTitle, type Chunk, type FileSection, type GroupKind, type GroupSection, type NarrationLength, type NarrationPlan, type PlanSection, type SectionResult } from "./types";
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
@@ -23,27 +24,31 @@ How you sound:
 
 Names:
 - Say names the way a person says them, split into words: handleSubmit is "handle submit", MAX_RETRIES is "max retries". Keep the code's exact words; never swap in a friendlier synonym. If the function is called del, say "del", not "delete". You can add a plain description after the real name, never instead of it.
-- The listener can't hear capital letters, so frame each name the first time: "a function called submit form", "the Comment component", "a setting named max retries", "a library called Marked". Never open a sentence with a bare name. Names like on load, list errors or process file otherwise sound like broken English.
+- The listener can't hear capital letters, so frame every name, every time, with what kind of thing it is: "the submit form function", "the Comment component", "the max retries setting", "a library called Marked". Never open a sentence with a bare name or put a verb straight after one; names like component will mount, on load or is user otherwise sound like broken English.
+- Never describe code structure, like arguments, "this dot props", spreading or "the map"; say what it does.
 - Whenever you single something out, give its searchable name, not just its role. Do the same for environment variables, action names, storage keys, web addresses and settings: "the variable called auth secret", "the address slash health". Never say a secret's value.
-- Use one name per thing for the whole part. For web handlers named after HTTP methods, say what triggers them: "the POST handler, which runs when the browser sends a new message".
+- Use one name per thing for the whole part, and for other files use the spoken name the tour outline gives. For web handlers named after HTTP methods, say what triggers them: "the POST handler, which runs when the browser sends a new message".
 
 Writing for the ear. This matters more than anything else:
 - Plain prose paragraphs only. No markdown of any kind: no headings, bullet points, numbered lists, bold, italics, tables, links, emoji or code blocks.
 - Never read code aloud. No symbols, brackets, operators, slashes, dots or snippets. Describe what the code does in words.
 - Refer to files by name and folder, in words, never as a path. Say nested folders with "inside", innermost first: "the route file in the chat folder, inside api". Never join folder names with commas, because that sounds like a list. Mention a file type only when it helps: "the Python file", "the stylesheet".
 - Write things the way the voice should say them. Acronyms go in capitals even when a folder is lowercase: "the UI folder", "ID", "IDs", "API". Product names go without dots: "Next JS", "Node JS", "the package JSON file". Library names go in words: react-router-dom is "React Router DOM". Spell names a voice would mangle the way they're said: "shad C N". Write abbreviations out: "utilities", "git ignore", "text area". Say numbers the way developers do: "port eighty eighty", "version three point eleven".
-- Don't put quotation marks or trailing dots around on-screen text. Say "a message that reads Still waiting".
+- Put on-screen text last in its sentence, after a colon, with no quotation marks: "the button says: Publish article." Never continue the sentence after it.
 - The listener can't see the screen, so never use visual cues like "as you can see", "at the top", "below" or "near the bottom". Point to things by what they do: "where the routes are listed", "the last thing the file does".
-- The first time a part uses a programming, framework or web term, gloss it in a few plain words in the same sentence: "a reducer, the function that decides how the shared data changes", "a slug, the short web-address version of a title". If an earlier part explained it, a three-word reminder is enough. Never defer it with "we'll get to that later". If a term isn't worth glossing, describe the behaviour instead of naming it.
+- The first time the tour uses a programming, framework or web term, gloss it in a few plain words in the same sentence: "a reducer, the function that decides how the shared data changes", "a slug, the short web-address version of a title". You're told which terms the listener has already had explained; for those, a reminder of three words at most. Never defer a term with "we'll get to that later". If a term isn't worth glossing, describe the behaviour instead of naming it.
 - Avoid parentheses; use another sentence instead. Don't recite line counts or line numbers.
 
 Accuracy:
 - Check before you claim. Before you state a count, count the items in the code; if you're going to name them anyway, drop the number. Before you say "every", "all", "only", "each" or "never", make sure the code shows it.
 - Trace a value from where it's set to where it's used before you say what it does. If it starts empty, is never used, or gets overridden, say that instead.
+- When you describe a check, guard or fallback, confirm it can fire: follow the exact name or path it reads to where that value is written, including the key it's stored or registered under. If they don't line up, it's a bug; say so instead of describing the protection.
+- Follow the failure path as well as the success path of every request, save or submit: what the code does when it fails, and what the user sees. Code that reads fields of a result without checking for an error first is a bug worth a sentence.
 - Describe things in the order they run, not the order they appear in the file. Say exactly how a check behaves: a hard stop or a skip, a real network call or a stand-in, and what the user sees when it triggers.
-- When an effect depends on framework or browser behaviour you can't confirm, say what the code is meant to do. A reason the code and its comments don't state, or a purpose guessed from a name, gets "probably".
-- Files that use this one, or that it uses, are not shown to you. Say what they do only as far as this file proves it. Never assume a connection just because of the order of the tour.
-- Hedge sparingly: "probably" or "likely" at most twice in a part, since a long listen full of them sounds unsure. If a guess about another file doesn't change the point, leave it out. If it does, give the listener something to do instead, like "check the pagination component too".
+- When an effect depends on framework or browser behaviour you can't confirm, say what the code is meant to do.
+- You're shown excerpts from related files: ones this file uses, ones that use it, and ones that share its action names, keys, fields or settings. State what those excerpts show as plain fact, naming the file. About a file you aren't shown, say only what this file proves. Never assume a connection because of the order of the tour.
+- Claims like "the one place", "nothing else needs touching" or "never" about other files need support in the code you were shown; otherwise leave them out. For "never" or "always" claims about what the user sees, check what shows while data is still loading.
+- Hedge only two kinds of thing: why someone wrote the code, when nothing says, and behaviour outside the repository, such as the backend or a library. Use "probably" at most twice in a part. Never hedge what code in this repository does: read it in the excerpts, or leave it out. If an earlier part stated something as fact, don't hedge it now.
 - Don't list things that aren't there unless the listener would otherwise go looking for them.
 - Never read out secrets, keys, tokens, passwords or personal data, even if they appear in the code.`;
 
@@ -59,6 +64,10 @@ export type PromptContext = {
   budget: Budget;
   /** Terms the introduction defines once, so parts don't keep redefining them. */
   terms: string[];
+  /** Which files hand things to which, for related-code excerpts. */
+  links: LinkIndex;
+  /** How each narrated file is referred to aloud, so every part uses the same name. */
+  spoken: Map<string, string>;
 };
 
 export function buildContext(ingest: IngestResult, plan: NarrationPlan, length: NarrationLength = "medium"): PromptContext {
@@ -73,7 +82,82 @@ export function buildContext(ingest: IngestResult, plan: NarrationPlan, length: 
     files,
     budget: BUDGETS[length],
     terms: coreTerms(collectDeps(ingest.files), ingest.files),
+    links: buildLinkIndex(ingest.files),
+    spoken: spokenFileNames(plan.sections.flatMap((s) => (s.kind === "file" ? [s.path] : s.paths))),
   };
+}
+
+const GENERIC_BASES = new Set(["index", "route", "page", "layout", "main", "mod", "init", "__init__", "types", "utils", "helpers", "constants", "config", "server", "client", "handler", "handlers", "schema", "models", "views", "urls", "settings", "app", "lib", "default"]);
+
+/** Folders that say what kind of thing a file is: a file in reducers is a reducer. */
+const KIND_FOLDERS: Record<string, string> = {
+  components: "component",
+  reducers: "reducer",
+  hooks: "hook",
+  services: "service",
+  models: "model",
+  controllers: "controller",
+  routes: "route",
+  pages: "page",
+  stores: "store",
+  slices: "slice",
+  middlewares: "middleware",
+  schemas: "schema",
+  views: "view",
+  screens: "screen",
+  layouts: "layout",
+  providers: "provider",
+  contexts: "context",
+  actions: "actions file",
+  selectors: "selectors file",
+};
+
+/** "articleList" → "article list"; "CommentInput" → "Comment Input"; "src" → "source". */
+function words(name: string) {
+  const stem = name.replace(/\.[^.]+$/, "").replace(/^_+|_+$/g, "");
+  const spaced = stem
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[-_.]+/g, " ")
+    .replace(/\bsrc\b/g, "source")
+    .trim();
+  return /^[a-z]/.test(stem) ? spaced.toLowerCase() : spaced;
+}
+
+/**
+ * One spoken name per narrated file, so every part calls it the same thing:
+ * "the agent file", "the common reducer", "the Header component", "the index
+ * file in the Article folder", "the top-level reducer file" when a reducers
+ * folder sits beside it.
+ */
+export function spokenFileNames(paths: string[]): Map<string, string> {
+  const dirs = new Set(paths.flatMap((p) => p.split("/").slice(0, -1).map((_, i, all) => all.slice(0, i + 1).join("/"))));
+  const first = new Map<string, string>();
+  const withFolder = new Map<string, string>();
+  for (const p of paths) {
+    const parts = p.split("/");
+    const file = parts[parts.length - 1];
+    const stem = file.replace(/\.[^.]+$/, "");
+    const base = words(file);
+    const folderName = parts.length > 1 ? parts[parts.length - 2] : "";
+    const folder = folderName ? words(folderName) : "";
+    const parent = parts.slice(0, -1).join("/");
+    const kindFolder = parts.slice(-3, -1).reverse().find((d) => KIND_FOLDERS[d.toLowerCase()]);
+    const kind = kindFolder ? KIND_FOLDERS[kindFolder.toLowerCase()] : null;
+    const siblingDir = [stem, `${stem}s`].some((d) => dirs.has(parent ? `${parent}/${d}` : d));
+    const inFolder = folder ? `the ${base} file in the ${folder} folder` : `the ${base} file`;
+    let name: string;
+    const positional = /^(index|route|page|layout|main|mod|init|__init__|default)$/i.test(stem);
+    if (GENERIC_BASES.has(stem.toLowerCase()) && (positional || !kind)) name = inFolder;
+    else if (siblingDir) name = `the top-level ${base} file`;
+    else if (kind && !base.toLowerCase().endsWith(kind)) name = `the ${base} ${kind}`;
+    else name = `the ${base} file`;
+    first.set(p, name);
+    withFolder.set(p, name === inFolder ? inFolder : `${name} in the ${folder} folder`);
+  }
+  // Two files that would sound the same get their folder said too.
+  const counts = new Map<string, number>();
+  for (const n of first.values()) counts.set(n.toLowerCase(), (counts.get(n.toLowerCase()) ?? 0) + 1);
+  return new Map([...first].map(([p, n]) => [p, (counts.get(n.toLowerCase()) ?? 0) > 1 ? withFolder.get(p)! : n]));
 }
 
 /** Strips badges, images and HTML from a README and keeps the opening. */
@@ -255,43 +339,83 @@ const BANNED_OPENINGS =
   'Don\'t open with "This file", "This is", "Here we have", "Next up", "Now let\'s", "Alright", "So", "Remember", "Imagine", "If this file disappeared", "Everything we\'ve covered so far", or a question followed by "That\'s the question this file answers".';
 
 const FLOW_RULES = [
-  "Tie this part back to at least one earlier part by name, with the concrete hand-off: what is passed, by whom, to whom. For example: \"the index file we heard about earlier hands this store to the whole app.\"",
-  "Say \"we just heard\" only about the part immediately before. For older parts say \"earlier\". Never say the listener has heard about something that isn't listed as covered, never say \"we're about to\", and never make sweeping claims like \"everything so far\".",
-  "End with the most useful takeaway, in its own short paragraph. Don't end on a leftover fact, and don't announce the next part by name; the tour announces each part.",
+  "Connect this part to an earlier one only where something real passes between them: say what is handed over and by which file, inside a sentence about this file's own work. At most two such links in a part. Never add one just to place a file, and never use stock phrases like \"we heard about earlier\" or \"we covered earlier\"; the file's name is enough.",
+  "Don't re-explain a mechanism, pattern or warning an earlier part already explained, such as how requests are handled or a deprecation; name it in a few words and move on to what's new here. Don't repeat a change recipe an earlier part gave; mention only the step that lives in this file.",
+  "Never say the listener has heard about something that isn't listed as covered, never say \"we're about to\", and never make sweeping claims like \"everything so far\".",
+  "Let the last paragraph carry the most useful point for a builder, said plainly. Don't label it with \"The takeaway\", \"The upshot\", \"Bottom line\" or \"In short\", don't restate what the part already said, and don't announce the next part; the tour announces each part.",
 ];
 
-function tourPosition(ctx: PromptContext, id: string): string {
+/** What the listener has already heard, from the parts that are finished. */
+function heardSoFar(ctx: PromptContext, i: number, earlier: Map<string, SectionResult>): string {
+  const done = ctx.plan.sections
+    .slice(0, i)
+    .map((sec, n) => ({ n, sec, r: earlier.get(sec.id) }))
+    .filter((x): x is { n: number; sec: PlanSection; r: SectionResult } => Boolean(x.r));
+  if (!done.length) return "";
+  // Newest parts matter most; older ones shrink to their first sentence if space runs short.
+  let budget = 12_000;
+  const lines: string[] = [];
+  for (const { n, r } of [...done].reverse()) {
+    const recent = i - n <= 8;
+    const summary = recent ? r.summary : firstSentence(r.summary);
+    const tip = recent && r.changes ? `\n   Tip it gave: ${clip(r.changes, 260)}` : "";
+    const line = `${n + 1}. ${r.title} (${r.paths.length > 2 ? `${r.paths.slice(0, 2).join(", ")} and more` : r.paths.join(", ")}): ${clip(summary, 320)}${tip}`;
+    if (budget - line.length < 0) break;
+    budget -= line.length;
+    lines.unshift(line);
+  }
+  return `What the listener has already heard in the parts before this one, with the facts each established. Treat these as settled: don't contradict them, don't hedge them, and don't explain them again:\n<heard>\n${lines.join("\n")}\n</heard>`;
+}
+
+function clip(text: string, max: number) {
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}
+
+function firstSentence(text: string) {
+  return text.match(/^[^.!?]+[.!?]/)?.[0] ?? text;
+}
+
+function tourPosition(ctx: PromptContext, id: string, earlier: Map<string, SectionResult> = new Map()): string {
   const i = ctx.plan.sections.findIndex((s) => s.id === id);
   if (i === -1) return "";
   const total = ctx.plan.sections.length;
   const outline = ctx.plan.sections
-    .map((s, n) => `${n + 1}. ${sectionLabel(s)}${n === i ? "   <- this part" : ""}`)
+    .map((s, n) => {
+      const say = s.kind === "file" ? ctx.spoken.get(s.path) : undefined;
+      return `${n + 1}. ${sectionLabel(s)}${say ? ` (say: ${say})` : ""}${n === i ? "   <- this part" : ""}`;
+    })
     .join("\n");
   const lines = [
-    `This is part ${i + 1} of ${total}. The listener has already heard an introduction to the whole app, so don't re-explain what the app is. If an idea was introduced in an earlier part, refer back to it briefly instead of defining it again. You may mention that something comes up later only if it's in the outline below.`,
+    `This is part ${i + 1} of ${total}. The listener has already heard an introduction to the whole app, so don't re-explain what the app is. You may mention that something comes up later only if it's in the outline below.`,
   ];
-  if (ctx.terms.length) {
+  const explained = new Set(ctx.terms);
+  for (const sec of ctx.plan.sections.slice(0, i)) for (const t of earlier.get(sec.id)?.terms ?? []) explained.add(t);
+  if (explained.size) {
     lines.push(
-      `The introduction defines these terms for the listener: ${ctx.terms.join(", ")}. Don't define them again; a few words of reminder at most.`,
+      `Terms the listener has already had explained: ${[...explained].slice(0, 40).join(", ")}. Don't explain them again; a few words of reminder at most.`,
     );
   }
+  const heard = heardSoFar(ctx, i, earlier);
+  if (heard) lines.push(heard);
   const recency: string[] = [];
   if (i > 0) recency.push(`Immediately before this part: ${sectionLabel(ctx.plan.sections[i - 1])}.`);
-  if (i > 1) {
-    const earlier = ctx.plan.sections.slice(Math.max(0, i - 8), i - 1).reverse().map(sectionLabel);
-    recency.push(`Earlier in the tour, most recent first: ${earlier.join("; ")}${i - 1 > 7 ? "; and more" : ""}.`);
-  }
   if (i === 0) recency.push("This is the first part after the introduction.");
   if (i < total - 1) recency.push(`Coming up next: ${ctx.plan.sections.slice(i + 1, i + 3).map(sectionLabel).join("; then ")}.`);
-  recency.push("Anything not listed in the tour outline before this part hasn't been covered yet.");
+  recency.push("Every part before this one in the outline has been heard, even if it isn't summarised above; nothing after it has.");
   if (i === total - 1) {
     recency.push(
-      "This is the last part of the tour before the closing guide. End with two or three sentences that pull it together: how the main pieces fit, and where a builder would most likely start changing things.",
+      "This is the last part before the closing guide, which covers where to make changes and wraps up the tour. Don't add a wrap-up or where-to-start advice of your own.",
     );
   }
   lines.push(recency.join("\n"));
-  lines.push(`The whole tour, in listening order:\n<tour>\n${outline}\n</tour>`);
+  lines.push(`The whole tour, in listening order, with the spoken name to use for each file:\n<tour>\n${outline}\n</tour>`);
   return lines.join("\n\n");
+}
+
+function relatedBlock(excerpts: RelatedExcerpt[]): string {
+  if (!excerpts.length) return "";
+  const blocks = excerpts.map((e) => `<related path="${e.path}" why="${e.why}">\n${e.text}\n</related>`);
+  return `Code from related files, trimmed to the lines that touch this file's names. Use it to state hand-offs as fact:\n${blocks.join("\n")}`;
 }
 
 function relations(ctx: PromptContext, file: RepoFile): string {
@@ -312,7 +436,9 @@ Then the narration itself, as plain paragraphs.
 
 CHANGES: one or two plain sentences for the guide to changes at the end of the tour: the single most useful change a builder might make here and exactly where, plus any trap, bug or rough edge you noticed. Write "none" if nothing stands out.
 
-SUMMARY: one or two plain sentences, for whoever writes the introduction, on what this part covers and which files use it or are used by it. Describe how the code connects, not the order of the tour, and include only what the narration actually says, with the same counts.`;
+TERMS: the programming or web terms you explained in this part, comma separated, or "none".
+
+SUMMARY: two or three plain sentences for the introduction and for later parts: what this part covers, which files use it or are used by it, and the facts it established that other parts might touch, such as what it hands to whom and the names of keys, actions or settings it owns. Describe how the code connects, not the order of the tour, and include only what the narration actually says, with the same counts.`;
 
 // ─── Per-file ───────────────────────────────────────────────────────────────
 
@@ -321,6 +447,7 @@ export function fileMessages(
   section: FileSection,
   chunk: Chunk,
   earlierParts: string[] = [],
+  earlier: Map<string, SectionResult> = new Map(),
 ): ChatMessage[] {
   const file = ctx.files.get(section.path);
   if (!file) throw new Error(`Unknown file ${section.path}`);
@@ -369,7 +496,7 @@ export function fileMessages(
           "Explain what it does and why it's built this way. Take its most important pieces in a sensible order and explain each one properly, naming the functions, components, settings or data a builder would search for.",
           "Make its connections concrete: which parts of the app use it and for what, what it relies on, and what information flows in and out. Use the file relationships listed above, and only claim what the code shows.",
           isLastChunk
-            ? "Give one to three change pointers a builder could act on without guessing, depending on how much this file controls. Each names the change they'd want, the exact function, setting or value to search for, and every other place that has to change with it: a second copy of the same list, a matching ID in another file, a flag that controls whether it shows, a backend that must accept a new field, a step that registers the new thing. If one of those places is in another file, name it and say what to check there. A partial recipe is worse than none. Consider removing a feature, not only adding one. Bring each one in the way a friend would, starting from the goal, like \"To show twenty articles a page…\" or \"If you'd rather sign people in with a magic link…\", never with a heading-like sentence. Stock lead-ins such as \"Say you want\" and \"The catch is\" wear thin over a long tour, so don't use them."
+            ? "Give one to three change pointers a builder could act on without guessing, depending on how much this file controls. Each names the change they'd want, the exact function, setting or value to search for, and every other place that has to change with it: a second copy of the same list, a matching ID in another file, a flag that controls whether it shows, a backend that must accept a new field, a step that registers the new thing. If one of those places is in another file, name it and say what to change there. A partial recipe is worse than none. Test each recipe by following it literally: check every place that writes or resets the value it depends on, every copy of a hard-coded value, including ones inside strings and web addresses, every piece of code that reads results by position, and every link to something being removed. Don't use something the app already has as the example of a new feature. Consider removing a feature, not only adding one. Bring each one in the way a friend would, starting from the goal, like \"To show twenty articles a page…\" or \"If you'd rather sign people in with a magic link…\", never with a heading-like sentence. Stock lead-ins such as \"Say you want\" and \"The catch is\" wear thin over a long tour, so don't use them."
             : "If this part holds an obvious place to change something a builder would care about, point it out, including any trap.",
           "Only say \"this is where you change X\" if X is actually written in this file. If this file just uses something defined elsewhere, such as prompt text, a model list, theme colours or error wording, send them to that file instead. Name the hard-coded values a builder is likely to hit, such as timeouts, page sizes, ports and delays, with the value in words.",
           "Skip trivial details like import lists, boilerplate, type annotations and commented-out code.",
@@ -379,12 +506,15 @@ export function fileMessages(
 
   const user = [
     contextBlock(ctx),
-    tourPosition(ctx, section.id),
+    tourPosition(ctx, section.id, earlier),
     about.join("\n"),
+    relatedBlock(relatedExcerpts(ctx.links, file.path, { total: ctx.budget.relatedChars })),
     `<file path="${file.path}">\n${chunk.text}\n</file>`,
     `Write the narration for ${chunk.total > 1 ? "this part of the file" : "this file"}.\n- ${instructions.join("\n- ")}`,
     REPLY_FORMAT,
-  ].join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
   return [
     { role: "system", content: SYSTEM_PROMPT },
@@ -410,7 +540,7 @@ function roughSize(lines: number) {
 
 const GROUP_GUIDANCE: Record<GroupKind, string> = {
   config:
-    "Say what these settings reveal about how the app is built and run: the framework and the few libraries that matter most, in plain words, and how it's deployed. Account for every script and dev dependency before summing up, and mention a missing tool only if its absence changes what the listener should do. Point out any file that instructs AI coding assistants, such as Cursor rules or a CLAUDE file, and what it tells them. For each environment variable, say its name in words, which feature uses it, and whether it's optional; never its value.",
+    "Say how to get the app running, what these settings reveal about how it's built, and whether it has tests, using the facts given. Cover the framework and the few libraries that matter most, in plain words, any runtime version the build tools need, and how it's deployed. Account for every script and dev dependency before summing up, and mention a missing tool only if its absence changes what the listener should do. Point out any file that instructs AI coding assistants, such as Cursor rules or a CLAUDE file, and what it tells them. For each environment variable, say its name in words, which feature uses it, and whether it's optional; never its value.",
   tests:
     "Say what kind of tests these are, what parts of the app they check, and roughly how they're run if that's clear. Mention which tests a builder should keep an eye on when changing a feature.",
   docs: "Summarise what's documented and when it would be worth reading.",
@@ -426,7 +556,30 @@ const GROUP_GUIDANCE: Record<GroupKind, string> = {
   more: "These are smaller files from the same area of the app. Keep it brisk.",
 };
 
-export function groupMessages(ctx: PromptContext, section: GroupSection): ChatMessage[] {
+/** Related code for a group: the best link or two for each of its first few files. */
+function groupRelated(ctx: PromptContext, section: GroupSection): RelatedExcerpt[] {
+  const inGroup = new Set(section.paths);
+  const out: RelatedExcerpt[] = [];
+  let used = 0;
+  for (const p of section.paths.slice(0, 8)) {
+    for (const e of relatedExcerpts(ctx.links, p, { maxFiles: 2, perFile: 500, total: 900 })) {
+      if (inGroup.has(e.path) || out.some((o) => o.path === e.path) || used + e.text.length > ctx.budget.relatedChars * 0.7) continue;
+      out.push(e);
+      used += e.text.length;
+    }
+  }
+  return out;
+}
+
+function groupFacts(ctx: PromptContext, section: GroupSection): string {
+  if (section.groupKind !== "config") return "";
+  const tests = [...ctx.files.values()].filter((f) => f.category === "test").length;
+  return tests
+    ? `Facts: the repository has ${tests} test file${tests === 1 ? "" : "s"}.`
+    : "Facts: the repository has no test files, so every change has to be checked by hand.";
+}
+
+export function groupMessages(ctx: PromptContext, section: GroupSection, earlier: Map<string, SectionResult> = new Map()): ChatMessage[] {
   const shown = section.paths.slice(0, MAX_GROUP_FILES);
   const listed = section.paths.slice(MAX_GROUP_FILES);
   const share = Math.max(700, Math.floor(ctx.budget.groupChars / Math.max(1, shown.length)));
@@ -440,12 +593,16 @@ export function groupMessages(ctx: PromptContext, section: GroupSection): ChatMe
 
   const user = [
     contextBlock(ctx),
-    tourPosition(ctx, section.id),
+    tourPosition(ctx, section.id, earlier),
     `This part covers ${section.paths.length} file${section.paths.length === 1 ? "" : "s"} together, because they're ${section.description}. A working title is "${section.title}".`,
+    groupFacts(ctx, section),
+    relatedBlock(groupRelated(ctx, section)),
     blocks.join("\n\n"),
     `Write one short section about these files as a whole.\n- Open with the one idea that ties them together, said as something that happens in the app, in a sentence the listener can hold onto. For example: "each page fills its own slot when you arrive and empties it when you leave."\n- Then name at most three files, the ones that control behaviour. For each, say where it shows up for the user and one concrete thing you'd change there, with the name to search for. Cover the rest in one sentence by what they do together. Never give every file its own sentence.\n- If a piece is a generic building block and the app has its own file built on it, say which one to open for which kind of change.\n- ${GROUP_GUIDANCE[section.groupKind]}\n- Don't open with "This group", "These files", "Everything we've covered so far" or a count of files.\n- ${FLOW_RULES.slice(1).join("\n- ")}\n- ${target(ctx.budget.groupWords)}`,
     REPLY_FORMAT,
-  ].join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
   return [
     { role: "system", content: SYSTEM_PROMPT },
@@ -466,15 +623,16 @@ function tourListing(results: SectionResult[], { changes = false } = {}): string
 }
 
 /** The chapters in listening order, with how many parts each holds. */
-function chapterListing(results: SectionResult[]): string {
-  const counts: { key: ChapterKey; n: number }[] = [];
+function chapterListing(results: SectionResult[]): { text: string; count: number } {
+  const counts: { title: string; n: number }[] = [];
   for (const r of results) {
     if (!r.chapter) continue;
+    const title = r.chapterTitle ?? chapterTitle(r.chapter);
     const last = counts[counts.length - 1];
-    if (last && last.key === r.chapter) last.n++;
-    else counts.push({ key: r.chapter, n: 1 });
+    if (last && last.title === title) last.n++;
+    else counts.push({ title, n: 1 });
   }
-  return counts.map((c) => `${CHAPTER_TITLES[c.key]} (${c.n} part${c.n === 1 ? "" : "s"})`).join("; ");
+  return { text: counts.map((c) => `${c.title} (${c.n} part${c.n === 1 ? "" : "s"})`).join("; "), count: counts.length };
 }
 
 /** Rough listening time for the whole script, at about 150 words a minute. */
@@ -486,22 +644,23 @@ function estimateMinutes(ctx: PromptContext, results: SectionResult[]): number {
 
 export function overviewMessages(ctx: PromptContext, results: SectionResult[]): ChatMessage[] {
   const chapters = chapterListing(results);
+  const minutes = estimateMinutes(ctx, results);
   const user = [
     contextBlock(ctx),
     `The rest of the walkthrough has already been written. Here is the tour, in the order the listener will hear it, with a summary of each part:\n<tour>\n${tourListing(results)}\n</tour>`,
     `Now write the introduction that plays first, before the tour.
 - Begin by saying, in a sentence or two, what this app is and what it's for, in plain terms. If it has a product name, use it. Don't greet them with "welcome", and don't mention Talkthrough.
-- Then give the big picture: the main areas of the app and the job each one does. Group related parts together rather than naming every file, and use the same names for things that the parts use.
-- Explain how data and actions flow through it. Follow one or two realistic things a person does with the app from start to finish, naming the parts involved along the way.
-- Mention the key technologies in plain words, and why they matter here. Skip ones that don't.${
+- Right after that, give the shape of the tour in two or three sentences: it runs about ${minutes} minutes${chapters.count ? ` in ${chapters.count} chapters: ${chapters.text}` : ""}. Use the chapters as the main areas of the app, so the structure is described once. Say each chapter's title inside a frame, like "the first chapter, Where it all starts, covers…", never as the subject of a sentence.
+- Then follow one or two realistic things a person does with the app, at the level of what they see and which areas take turns. Name the piece that does each job, using the names the parts use, but leave how it works, such as checks, guards, storage keys and error handling, to the parts.
+- Mention the key technologies in a sentence or two, in plain words, and why they matter here.${
       ctx.terms.length
         ? `\n- The parts that follow rely on you to define these terms, so explain each one briefly, once, where it first comes up naturally: ${ctx.terms.join(", ")}.`
         : ""
     }
-- Finish by previewing the tour: ${chapters ? `it's organised into these chapters, in order: ${chapters}. ` : ""}It runs about ${estimateMinutes(ctx, results)} minutes. Keep the preview to two or three sentences.
+- Only promise what the tour delivers.
 - Keep it flowing as speech: no lists of more than three things, and no stock phrases.
 - ${target(ctx.budget.overviewWords)}`,
-    "Reply with just the narration, as plain paragraphs. No title line and no summary line.",
+    `Reply with a first line "NAME: " followed by the app's name as you'd say it aloud, such as "Conduit" or "the Acme dashboard", then the narration as plain paragraphs. No title line and no summary line.`,
   ].join("\n\n");
   return [
     { role: "system", content: SYSTEM_PROMPT },
@@ -509,21 +668,25 @@ export function overviewMessages(ctx: PromptContext, results: SectionResult[]): 
   ];
 }
 
-export function closingMessages(ctx: PromptContext, results: SectionResult[]): ChatMessage[] {
+export function closingMessages(ctx: PromptContext, results: SectionResult[], overview = ""): ChatMessage[] {
   const user = [
     contextBlock(ctx, { tree: true }),
+    overview ? `The introduction the listener heard first:\n<introduction>\n${overview}\n</introduction>` : "",
     `Here is the walkthrough the listener has just heard, part by part, with the change notes each part made:\n<tour>\n${tourListing(results, { changes: true })}\n</tour>`,
-    `Now write the closing part of the walkthrough: a practical guide to where you'd go to change things.
+    `Now write the closing part of the walkthrough: a practical guide to where you'd go to change things, and the end of the tour.
+- Open with two or three sentences that bring back the big picture from the introduction, through one of its stories.
 - Choose the five to seven changes someone building on this particular app is most likely to want, such as changing the look, adding a page or screen, changing what the AI says, adding a field to the data, adjusting a limit, or adding an integration. Pick ones that fit this app, and include how to remove or switch off a feature if that fits.
-- For each, say which file or files to open and what to look for once you're there, naming them the way the parts did.
+- The listener has usually heard each recipe already. Name the goal and the file in one sentence, and add only what no single part could say: the other files that must change with it, and in what order. Never repeat a sentence or recipe from the tour.
 - Base every suggestion on what the parts actually said, especially their change notes. Don't contradict them, and don't hedge where a part was specific.
 - Mention anything to be careful about, such as things that must change together, or settings that live outside the code like environment variables.
-- If the parts noticed bugs or rough edges, gather the most important ones into one short paragraph of things worth fixing first.
+- If the parts noticed bugs or rough edges, gather the most important ones into one short paragraph of things worth fixing first. Rank them by what a user would notice today, and keep each one's status as the part gave it: a bug now, or a risk only after an upgrade.
 - Talk it through as advice from a friend, not as a list: vary how each suggestion begins, and never number them.
-- End with a short, warm sign-off that suggests one concrete first change to try. Keep it genuine, not cheesy.
+- End with one concrete first change to try, then a final sentence that makes clear the tour is over. Keep it genuine, not cheesy.
 - ${target(ctx.budget.closingWords)}`,
     "Reply with just the narration, as plain paragraphs. No title line and no summary line.",
-  ].join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   return [
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: user },

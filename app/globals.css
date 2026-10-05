@@ -1,0 +1,206 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/*
+ * Talkthrough is a single, always-dark surface: near-black with a dissolved
+ * botanical glow. Colour roles follow shadcn/ui's token names so its
+ * components pick them up, but every value is ours.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* Palette */
+  --ink: #05060a;
+  --ink-raised: #0b0d16;
+  --cobalt: #2f4ee0;
+  --cobalt-deep: #1a2b8f;
+  --periwinkle: #8f9cff;
+  --lavender: #b9a7f2;
+  --powder: #a8c9ea;
+  --soft-white: #eceef8;
+  --gold: #e7c87f;
+  --gold-bright: #f2d899;
+  --gold-deep: #b8954a;
+
+  /* shadcn roles */
+  --background: var(--ink);
+  --foreground: var(--soft-white);
+  --card: rgb(13 15 26 / 0.56);
+  --card-foreground: var(--soft-white);
+  --popover: #0d0f1a;
+  --popover-foreground: var(--soft-white);
+  --primary: var(--gold);
+  --primary-foreground: #17130a;
+  --secondary: rgb(143 156 255 / 0.08);
+  --secondary-foreground: var(--soft-white);
+  --muted: rgb(143 156 255 / 0.06);
+  --muted-foreground: #9aa2c4;
+  --accent: rgb(143 156 255 / 0.1);
+  --accent-foreground: var(--soft-white);
+  --destructive: #f08a8a;
+  --border: rgb(186 196 255 / 0.11);
+  --input: rgb(186 196 255 / 0.16);
+  --ring: rgb(143 156 255 / 0.45);
+  --radius: 1.25rem;
+
+  --faint: #6e7698;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-faint: var(--faint);
+
+  --color-cobalt: var(--cobalt);
+  --color-periwinkle: var(--periwinkle);
+  --color-lavender: var(--lavender);
+  --color-powder: var(--powder);
+  --color-soft-white: var(--soft-white);
+  --color-gold: var(--gold);
+  --color-gold-bright: var(--gold-bright);
+
+  --radius-sm: calc(var(--radius) - 8px);
+  --radius-md: calc(var(--radius) - 4px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 6px);
+
+  --font-sans: var(--font-instrument-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-serif: var(--font-instrument-serif), ui-serif, Georgia, serif;
+  --font-reading: var(--font-newsreader), ui-serif, Georgia, serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --animate-breathe: breathe 3.2s ease-in-out infinite;
+  --animate-drift: drift 90s ease-in-out infinite alternate;
+  --animate-drift-slow: drift-slow 140s ease-in-out infinite alternate;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes drift {
+  from {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+  }
+  to {
+    transform: translate3d(-4%, 3%, 0) rotate(14deg) scale(1.06);
+  }
+}
+
+@keyframes drift-slow {
+  from {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  to {
+    transform: translate3d(5%, -4%, 0) rotate(-10deg);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/40;
+  }
+
+  html {
+    background: var(--ink);
+    -webkit-text-size-adjust: 100%;
+    scrollbar-color: rgb(143 156 255 / 0.25) transparent;
+  }
+
+  /* No body background: the fixed backdrop sits beneath the content. */
+  body {
+    @apply text-foreground font-sans antialiased;
+    min-height: 100dvh;
+    font-feature-settings: "ss01", "kern";
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: rgb(231 200 127 / 0.28);
+    color: var(--soft-white);
+  }
+
+  :focus-visible {
+    outline: 1.5px solid var(--periwinkle);
+    outline-offset: 3px;
+  }
+}
+
+@layer components {
+  /* Wide letter-spaced small caps for labels. */
+  .label-caps {
+    font-family: var(--font-sans);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    line-height: 1.2;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+  }
+
+  .hairline {
+    border-color: var(--border);
+    border-width: 1px;
+  }
+
+  /* Thin glass panel. */
+  .panel {
+    background: linear-gradient(180deg, rgb(20 23 40 / 0.62), rgb(10 12 22 / 0.5));
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    backdrop-filter: blur(18px) saturate(115%);
+    -webkit-backdrop-filter: blur(18px) saturate(115%);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.04),
+      0 30px 80px -40px rgb(10 16 60 / 0.6);
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .text-pretty {
+    text-wrap: pretty;
+  }
+
+  .scroll-quiet {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(143 156 255 / 0.22) transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

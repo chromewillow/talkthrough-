@@ -1,0 +1,300 @@
+import "server-only";
+
+import { Readable, Transform } from "node:stream";
+import { createGunzip } from "node:zlib";
+import { extract as tarExtract } from "tar-stream";
+
+import { ArchiveError, fetchRepoArchive, MAX_ARCHIVE_BYTES, tooLargeMessage } from "@/lib/github/archive";
+import { parseRepoUrl, refCandidates, type RepoTarget } from "@/lib/github/parse-url";
+import { analyzeFiles, findReadme } from "./analyze";
+import { basenameOf, classifyPath, decodeText, extensionOf, looksGenerated, MAX_FILE_BYTES, notebookToText } from "./filters";
+import { GitignoreSet, LinguistHints } from "./gitignore";
+import type { IngestResult, RepoFile, SkippedEntry, SkipReason } from "./types";
+
+/** Total text we hand to the browser. Keeps the response well under serverless payload limits. */
+export const MAX_TOTAL_BYTES = 3_000_000;
+/** Most files we'll keep, however small. */
+export const MAX_FILES = 2_000;
+/** Most skipped entries we list one by one. */
+const MAX_LISTED_SKIPS = 2_500;
+/** Archive entries we'll walk before giving up. */
+const MAX_ENTRIES = 200_000;
+
+export class IngestError extends Error {
+  constructor(
+    public code: "not_found" | "too_large" | "empty" | "github_rate_limited" | "github_unreachable",
+    message: string,
+  ) {
+    super(message);
+    this.name = "IngestError";
+  }
+}
+
+type Candidate = { path: string; size: number; content: string };
+
+type WalkResult = {
+  candidates: Candidate[];
+  skipped: SkippedEntry[];
+  unlistedSkipped: number;
+  totalEntries: number;
+  gitignores: GitignoreSet;
+  linguist: LinguistHints;
+};
+
+export async function ingestRepo(input: string, opts: { token?: string; signal?: AbortSignal } = {}): Promise<IngestResult> {
+  const target = parseRepoUrl(input);
+  const { stream, ref, subpath } = await openArchive(target, opts);
+  const walk = await walkArchive(stream, subpath);
+  return finish(target, ref, subpath, walk);
+}
+
+async function openArchive(target: RepoTarget, opts: { token?: string; signal?: AbortSignal }) {
+  const candidates = refCandidates(target);
+  let lastError: unknown;
+  for (const { ref, subpath } of candidates) {
+    try {
+      const stream = await fetchRepoArchive({ owner: target.owner, repo: target.repo, ref, token: opts.token, signal: opts.signal });
+      return { stream, ref, subpath };
+    } catch (err) {
+      lastError = err;
+      // A missing ref means "try a longer branch name"; anything else is final.
+      if (!(err instanceof ArchiveError && err.code === "not_found")) break;
+    }
+  }
+  throw toIngestError(lastError);
+}
+
+function toIngestError(err: unknown): unknown {
+  if (!(err instanceof ArchiveError)) return err;
+  switch (err.code) {
+    case "not_found":
+      return new IngestError("not_found", err.message);
+    case "rate_limited":
+      return new IngestError("github_rate_limited", err.message);
+    case "too_large":
+      return new IngestError("too_large", err.message);
+    default:
+      return new IngestError("github_unreachable", err.message);
+  }
+}
+
+async function walkArchive(body: ReadableStream<Uint8Array>, subpath: string): Promise<WalkResult> {
+  const candidates: Candidate[] = [];
+  const skipped: SkippedEntry[] = [];
+  const skippedDirs = new Set<string>();
+  let unlistedSkipped = 0;
+  let totalEntries = 0;
+  let keptBytes = 0;
+  const gitignores = new GitignoreSet();
+  const linguist = new LinguistHints();
+  const prefix = subpath ? `${subpath.replace(/\/+$/, "")}/` : "";
+
+  const skip = (entry: SkippedEntry) => {
+    if (skipped.length < MAX_LISTED_SKIPS) skipped.push(entry);
+    else unlistedSkipped++;
+  };
+
+  let downloaded = 0;
+  const counter = new Transform({
+    transform(chunk: Buffer, _enc, cb) {
+      downloaded += chunk.length;
+      if (downloaded > MAX_ARCHIVE_BYTES) cb(new ArchiveError("too_large", tooLargeMessage()));
+      else cb(null, chunk);
+    },
+  });
+
+  const extractor = tarExtract();
+  const source = Readable.fromWeb(body as import("node:stream/web").ReadableStream<Uint8Array>);
+  const gunzip = createGunzip();
+  const fail = (err: Error) => extractor.destroy(err);
+  source.on("error", fail);
+  counter.on("error", fail);
+  gunzip.on("error", fail);
+  source.pipe(counter).pipe(gunzip).pipe(extractor);
+
+  try {
+    for await (const entry of extractor) {
+      const header = entry.header;
+      // GitHub tarballs wrap everything in "<repo>-<sha>/".
+      const full = header.name.replace(/^[^/]*\/?/, "");
+      if (header.type !== "file" || !full || (prefix && !full.startsWith(prefix))) {
+        entry.resume();
+        continue;
+      }
+      const path = full.slice(prefix.length);
+      totalEntries++;
+      if (totalEntries > MAX_ENTRIES) {
+        entry.resume();
+        throw new IngestError("too_large", tooLargeMessage());
+      }
+
+      const base = basenameOf(path);
+      const size = header.size ?? 0;
+
+      // Ignore rules are read before anything else is decided.
+      if ((base === ".gitignore" || base === ".gitattributes") && size < 200_000) {
+        const text = decodeText(await readEntry(entry));
+        if (text !== null) {
+          if (base === ".gitignore") gitignores.add(path, text);
+          else linguist.add(path, text);
+        }
+        continue;
+      }
+
+      const verdict = classifyPath(path, size);
+      if (!verdict.keep) {
+        entry.resume();
+        if (verdict.dirDepth !== undefined) {
+          const dir = path.split("/").slice(0, verdict.dirDepth + 1).join("/");
+          if (!skippedDirs.has(dir)) {
+            skippedDirs.add(dir);
+            skip({ path: dir, reason: verdict.reason, isDir: true });
+          }
+        } else {
+          skip({ path, reason: verdict.reason });
+        }
+        continue;
+      }
+
+      if (candidates.length >= MAX_FILES || keptBytes > MAX_TOTAL_BYTES * 3) {
+        entry.resume();
+        skip({ path, reason: "limit" });
+        continue;
+      }
+
+      const buf = await readEntry(entry, MAX_FILE_BYTES + 1);
+      let text = decodeText(buf);
+      if (text === null) {
+        skip({ path, reason: "binary" });
+        continue;
+      }
+      if (extensionOf(path) === "ipynb") {
+        text = notebookToText(text);
+        if (text === null) {
+          skip({ path, reason: "data" });
+          continue;
+        }
+      }
+      if (!text.trim()) {
+        skip({ path, reason: "empty" });
+        continue;
+      }
+      if (looksGenerated(path, text)) {
+        skip({ path, reason: "generated" });
+        continue;
+      }
+      keptBytes += text.length;
+      candidates.push({ path, size, content: text });
+    }
+  } catch (err) {
+    source.destroy();
+    if (err instanceof IngestError) throw err;
+    if (err instanceof ArchiveError) throw toIngestError(err);
+    throw new IngestError("github_unreachable", "The download from GitHub was interrupted. Try again in a moment.");
+  }
+
+  return { candidates, skipped, unlistedSkipped, totalEntries, gitignores, linguist };
+}
+
+async function readEntry(entry: AsyncIterable<unknown>, limit = Infinity): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const raw of entry) {
+    const chunk = raw as Buffer;
+    if (total < limit) {
+      chunks.push(chunk);
+      total += chunk.length;
+    }
+  }
+  return Buffer.concat(chunks).subarray(0, Math.min(total, limit));
+}
+
+function finish(target: RepoTarget, ref: string, subpath: string, walk: WalkResult): IngestResult {
+  const { gitignores, linguist } = walk;
+  const skipped = [...walk.skipped];
+  let unlistedSkipped = walk.unlistedSkipped;
+  const skip = (entry: SkippedEntry) => {
+    if (skipped.length < MAX_LISTED_SKIPS) skipped.push(entry);
+    else unlistedSkipped++;
+  };
+
+  const kept: Candidate[] = [];
+  for (const c of walk.candidates) {
+    if (gitignores.ignores(c.path)) skip({ path: c.path, reason: "gitignored" });
+    else if (linguist.isGenerated(c.path)) skip({ path: c.path, reason: "generated" });
+    else kept.push(c);
+  }
+
+  if (kept.length === 0) {
+    throw new IngestError(
+      "empty",
+      subpath
+        ? `We didn't find any readable source files in the "${subpath}" folder.`
+        : "We didn't find any readable source files in that repository — it may only contain assets, data or binaries.",
+    );
+  }
+
+  const analyzed = analyzeFiles(kept);
+  const readmePath = findReadme(analyzed.map((f) => f.path));
+
+  // Trim to the byte budget, keeping the most central files.
+  const notes: string[] = [];
+  let files: RepoFile[] = analyzed;
+  const totalBytes = analyzed.reduce((n, f) => n + f.content.length, 0);
+  if (totalBytes > MAX_TOTAL_BYTES) {
+    const ranked = [...analyzed].sort((a, b) => {
+      if (a.path === readmePath) return -1;
+      if (b.path === readmePath) return 1;
+      return b.importance - a.importance || a.content.length - b.content.length;
+    });
+    const keep = new Set<string>();
+    let used = 0;
+    for (const f of ranked) {
+      if (used + f.content.length > MAX_TOTAL_BYTES) continue;
+      keep.add(f.path);
+      used += f.content.length;
+    }
+    const dropped = analyzed.filter((f) => !keep.has(f.path));
+    dropped.forEach((f) => skip({ path: f.path, reason: "limit" }));
+    files = analyzed.filter((f) => keep.has(f.path));
+    // Imports pointing at dropped files no longer resolve to anything we can show.
+    for (const f of files) {
+      f.imports = f.imports.filter((p) => keep.has(p));
+      f.importedBy = f.importedBy.filter((p) => keep.has(p));
+    }
+    notes.push(
+      `This repository is large, so we kept the ${files.length} most central files and set aside ${dropped.length} others.`,
+    );
+  }
+  if (walk.candidates.length >= MAX_FILES) {
+    notes.push(`We stopped reading after ${MAX_FILES.toLocaleString("en-US")} source files.`);
+  }
+
+  files.sort((a, b) => a.path.localeCompare(b.path));
+  const skippedSorted = skipped.sort((a, b) => a.path.localeCompare(b.path));
+
+  return {
+    repo: {
+      owner: target.owner,
+      repo: target.repo,
+      ref,
+      subpath,
+      htmlUrl:
+        `https://github.com/${target.owner}/${target.repo}` +
+        (ref !== "HEAD" || subpath ? `/tree/${ref === "HEAD" ? "HEAD" : ref}${subpath ? `/${subpath}` : ""}` : ""),
+    },
+    files,
+    skipped: skippedSorted,
+    readmePath,
+    stats: {
+      totalEntries: walk.totalEntries,
+      includedFiles: files.length,
+      includedBytes: files.reduce((n, f) => n + f.content.length, 0),
+      skippedEntries: skippedSorted.length + unlistedSkipped,
+      unlistedSkipped,
+    },
+    notes,
+  };
+}
+
+export type { SkipReason };

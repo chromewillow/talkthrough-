@@ -55,6 +55,8 @@ export function toSpeakable(input: string): string {
   // Code names a voice would spell out or mash together: SET_PAGE, mapDispatchToProps.
   t = t.replace(/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/g, screamingToWords);
   t = t.replace(/\b[a-z][a-z0-9]*(?:[A-Z]+[a-z0-9]*)+\b/g, camelToWords);
+  // Joined-up names a voice may run together: "CommentInput" → "Comment Input".
+  t = t.replace(/\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+\b/g, (w: string) => (JOINED_KEEP.has(w) ? w : w.replace(/([a-z0-9])([A-Z])/g, "$1 $2")));
   // Action names written without underscores: "APP LOAD", "LOGIN".
   t = t.replace(/\b[A-Z][A-Z0-9]{2,}(?:[ \t]+[A-Z][A-Z0-9]{1,})*\b/g, shoutedToWords);
   // Trailing-off dots: "here... yet" → "here, yet".
@@ -63,7 +65,11 @@ export function toSpeakable(input: string): string {
   // Folder shorthand a voice reads letter by letter.
   t = t.replace(/(?<![\w/.-])src(?![\w/.-])/g, "source").replace(/(?<![\w/.-])utils(?![\w/.-])/g, "utilities");
   // Lowercase acronyms get read as words ("id" as in Freud); capitals get spelled out.
-  t = t.replace(/\b(id|url|api|json|html|css|ui|sql|jwt|http|https|cli|sdk|llm)(s?)\b/g, (_, a: string, plural: string) => a.toUpperCase() + plural);
+  // ...except a literal value, like "the key jwt" or a field named id.
+  t = t.replace(
+    /(?<!\b(?:key|named|called|text|string|value|field|reads|says)\s)\b(id|url|api|json|html|css|ui|sql|jwt|http|https|cli|sdk|llm)(s?)\b/g,
+    (_, a: string, plural: string) => a.toUpperCase() + plural,
+  );
   t = polishPhrasing(t);
   // Emoji and decorative symbols.
   t = t.replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, "");
@@ -82,6 +88,14 @@ export function toSpeakable(input: string): string {
 }
 
 const ACRONYMS = new Set(["API", "URL", "ID", "IDS", "JWT", "HTTP", "HTTPS", "UI", "SQL", "CSS", "HTML", "JSON", "CLI", "SDK", "LLM", "AI", "DB", "AWS", "S3", "DOM", "XML", "PDF", "CSV", "SMS", "OTP", "TTL", "CORS", "CSRF", "OAUTH", "SSO", "MFA", "UUID"]);
+/** Brand names written joined up, which read the same either way but look wrong split. */
+const JOINED_KEEP = new Set([
+  "GitHub", "GitLab", "JavaScript", "TypeScript", "OpenAI", "OpenRouter", "ElevenLabs", "PostgreSQL", "MySQL", "MongoDB", "GraphQL",
+  "YouTube", "LinkedIn", "WordPress", "PlayStation", "FastAPI", "DynamoDB", "CloudFlare", "Cloudflare", "DigitalOcean", "PayPal",
+  "WhatsApp", "TikTok", "SoundCloud", "DeepSeek", "LangChain", "LlamaIndex", "HuggingFace", "NextAuth", "TanStack", "PlanetScale",
+  "SvelteKit", "NestJS", "RxJS", "WebSocket", "WebSockets", "WebAssembly", "PowerShell", "VSCode", "IntelliJ", "PyTorch", "TensorFlow",
+  "SQLite", "NoSQL", "MariaDB", "OAuth", "ClickHouse", "CockroachDB", "BigQuery", "RedHat", "MacBook", "AirPods", "FaceTime",
+]);
 const CAMEL_KEEP = new Set(["iPhone", "iPad", "iOS", "iPadOS", "macOS", "watchOS", "tvOS", "visionOS", "eBay", "jQuery", "tRPC", "gRPC", "iCloud", "pH"]);
 
 const KEEP_CAPS = new Set([...ACRONYMS, "README", "TODO", "CRUD", "REST", "YAML", "TOML", "HTMX", "GRPC", "NASA", "UTF", "ASCII", "GPU", "CPU", "RAM", "SSD", "MVP", "SaaS", "FAQ", "GDPR", "ESM", "CJS", "NPM", "PNPM", "RSS", "SVG", "PNG", "JPEG", "GIF", "MP3", "MP4", "WASM", "SEO", "OK", "TV", "US", "UK", "EU", "AM", "PM", "USD", "GPT", "LLMS", "APIS", "URLS", "SDKS", "UIS", "PDFS", "CSVS"]);
@@ -165,6 +179,8 @@ export type ParsedSection = {
   name: string | null;
   recipes: string[];
   bugs: string[];
+  /** Bugs noticed in the code but not told to the listener. */
+  noted: string[];
   explained: string[];
   facts: string[];
   /** From the introduction: chapter titles and the bridges into each chapter, by chapter number. */
@@ -175,7 +191,7 @@ export type ParsedSection = {
 const TITLE_RE = /^[ \t>*_#]*TITLE[ \t*_]*[:：][ \t*_]*(.+)$/im;
 const NAME_RE = /^[ \t>*_#]*NAME[ \t*_]*[:：][ \t*_]*(.+)$/m;
 /** Lines after the narration, in any order: "RECIPE: …", "BUGS: …", "SUMMARY: …" and the rest. */
-const TRAILER_RE = /^[ \t>*_#]*(CHANGES|TERMS|SUMMARY|RECIPES?|BUGS|EXPLAINED|FACTS)[ \t*_]*[:：][ \t*_]*/gim;
+const TRAILER_RE = /^[ \t>*_#]*(CHANGES|TERMS|SUMMARY|RECIPES?|BUGS|NOTED|EXPLAINED|FACTS)[ \t*_]*[:：][ \t*_]*/gim;
 const CHAPTER_LINE_RE = /^[ \t>*_#]*(CHAPTER|BRIDGE)[ \t]+(\d{1,2})[ \t*_]*[:：][ \t*_]*(.+)$/gim;
 
 /** "- one\n- two" → ["one", "two"]; "none" → []. */
@@ -185,7 +201,7 @@ function lines(value: string | undefined): string[] {
     .split("\n")
     .map((l) => cleanInline(l.replace(/^[\s*•-]*(\d{1,2}[.)]\s+)?/, "")))
     .filter((l) => l && !/^none\.?$/i.test(l))
-    .slice(0, 12);
+    .slice(0, 20);
 }
 
 /** Splits a "TITLE: … / narration / CHANGES / TERMS / SUMMARY" reply into its parts. */
@@ -197,7 +213,8 @@ export function parseSectionReply(raw: string): ParsedSection {
 
   let title: string | null = null;
   let name: string | null = null;
-  const trailers: Record<string, string> = {};
+  // A label can appear more than once ("BUGS: one" then "BUGS: two"); every line counts.
+  const found: Record<string, string[]> = {};
   const chapters: Record<number, string> = {};
   const bridges: Record<number, string> = {};
 
@@ -214,10 +231,13 @@ export function parseSectionReply(raw: string): ParsedSection {
     labels.forEach((m, i) => {
       const end = i + 1 < labels.length ? labels[i + 1].index : text.length;
       const key = m[1].toUpperCase().replace(/^RECIPES$/, "RECIPE");
-      trailers[key] ??= text.slice(m.index + m[0].length, end).trim();
+      (found[key] ??= []).push(text.slice(m.index + m[0].length, end).trim());
     });
     text = text.slice(0, labels[0].index).trim();
   }
+  const trailers: Record<string, string> = Object.fromEntries(
+    Object.entries(found).map(([k, v]) => [k, k === "TERMS" ? v.join(", ") : k === "SUMMARY" ? v.join(" ") : v.join("\n")]),
+  );
   // A summary that swallowed a CHANGES note on the same line.
   if (trailers.SUMMARY && !trailers.CHANGES) {
     const inSummary = trailers.SUMMARY.match(/\bCHANGES[ \t*_]*[:：][ \t*_]*(.+)$/i);
@@ -266,6 +286,7 @@ export function parseSectionReply(raw: string): ParsedSection {
     name: name ? name.slice(0, 80) : null,
     recipes: lines(trailers.RECIPE),
     bugs: lines(trailers.BUGS),
+    noted: lines(trailers.NOTED),
     explained: lines(trailers.EXPLAINED),
     facts: lines(trailers.FACTS),
     chapters,

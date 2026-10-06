@@ -114,8 +114,10 @@ export type SectionResult = {
   terms?: string[];
   /** Mechanisms and warnings this part explained in full. */
   explained?: string[];
-  /** Bugs and rough edges whose code is in this part's files. */
+  /** Bugs and rough edges this part told the listener about. */
   bugs?: string[];
+  /** Bugs this part noticed but didn't tell the listener about. */
+  noted?: string[];
   /** Values and locations other parts might also mention. */
   facts?: string[];
   /** Complete change recipes, for the closing guide to merge. */

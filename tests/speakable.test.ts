@@ -58,6 +58,11 @@ describe("code names", () => {
     expect(toSpeakable("It sends APP LOAD, then LOGIN, with the JWT and the API URL.")).toBe("It sends app load, then login, with the JWT and the API URL.");
   });
 
+  it("keeps literal values in their own case and splits joined-up names", () => {
+    expect(toSpeakable("It saves the token under the key jwt and sends the API url.")).toBe("It saves the token under the key jwt and sends the API URL.");
+    expect(toSpeakable("The CommentInput component sits on GitHub.")).toBe("The Comment Input component sits on GitHub.");
+  });
+
   it("smooths trailing-off dots and folder shorthand", () => {
     expect(toSpeakable("A line that reads No articles are here... yet.")).toBe("A line that reads No articles are here, yet.");
     expect(toSpeakable("It lives in the src folder.")).toBe("It lives in the source folder.");
@@ -82,6 +87,13 @@ describe("parseSectionReply", () => {
     expect(r.bugs).toEqual(["submit form: errors never show"]);
     expect(r.explained).toEqual(["pages empty their shared data when you leave"]);
     expect(r.facts).toEqual([]);
+  });
+
+  it("keeps every line when a label repeats", () => {
+    const r = parseSectionReply("TITLE: Settings\n\nThe settings page.\n\nBUGS: the save button stays disabled\nBUGS: errors clear the user\nRECIPE: one\nRECIPE: two\nNOTED: unload never sent\nSUMMARY: Settings.");
+    expect(r.bugs).toEqual(["the save button stays disabled", "errors clear the user"]);
+    expect(r.recipes).toEqual(["one", "two"]);
+    expect(r.noted).toEqual(["unload never sent"]);
   });
 
   it("reads chapter names and bridges from the introduction", () => {

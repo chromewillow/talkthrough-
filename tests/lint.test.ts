@@ -22,12 +22,23 @@ describe("lintPart", () => {
     );
     const text = flags.join("\n");
     expect(text).toMatch(/opens with the same words as part 4/);
-    expect(text).toMatch(/repeats part 3/);
+    expect(text).toMatch(/repeats what the listener heard in part 3/);
     expect(text).toMatch(/can't see/);
     expect(text).toMatch(/reads code aloud/);
     expect(text).toMatch(/ear can't catch/);
     expect(text).toMatch(/hedges/);
     expect(text).toMatch(/"The catch is" has already been used 2 times/);
+  });
+
+  it("catches a paraphrased repeat and a back-reference to nothing", () => {
+    const flags = lintPart(
+      "Leaving the settings page empties its shared data, so the next visit starts clean.",
+      [{ number: 9, title: "Pages", body: "When you leave a page, its shared data is emptied so the next visit starts clean with nothing stale." }],
+    ).join("\n");
+    expect(flags).toMatch(/repeats what the listener heard in part 9/);
+    expect(flags).not.toMatch(/refers back/);
+    const lonely = lintPart("This uses the same recipe as the editor.", []).join("\n");
+    expect(lonely).toMatch(/refers back to something no earlier part said/);
   });
 
   it("flags a term explained again", () => {
